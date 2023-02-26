@@ -9,35 +9,31 @@ mod buckets;
 
 use crate::dataset::Dataset;
 use crate::storage::*;
-use crate::buckets::series_to_bucket;
 // use std::path::PathBuf;
 // use arrow2::io::ndjson;
 
 fn main() {
     let start = SystemTime::now();
-    let args = ScanArgsParquet::default();
-    let mut df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap();    
-    println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
+    let _ = Dataset::from_storage(&"data/stock_parts".to_string()); // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+    println!("Reading dataset took: {} ms.", start.elapsed().unwrap().as_millis());
 
-    // Bucketing
     let start = SystemTime::now();
-    let mut arr = series_to_bucket(df.column("sku_key").unwrap(), 5);
-    arr.rename("$bucket");
-    df.with_column(arr).unwrap();
-    println!("Bucketing took: {} ms", start.elapsed().unwrap().as_millis());
+    let args = ScanArgsParquet::default();
+    let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+    println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
 
     // Cast to categorical
     // df.replace("option_name", df.column("option_name").unwrap().cast(&DataType::Utf8).unwrap().cast(&DataType::Categorical(None)).unwrap()).unwrap();
-
+    
     // Presto bucketing 000234_0_20180102_030405_00641_x1y2z
 
     // Implement anyhow for results of functions https://docs.rs/anyhow/latest/anyhow/
 
-
     // Dataset from DataFrame
     let start = SystemTime::now();
-    let parts = vec!["$bucket".to_string()];
-    let ds = Dataset::from_dataframe(df, &parts, None);
+    let parts = Vec::new(); //vec!["org_key".to_string()];
+    let buckets = vec!["sku_key".to_string()];
+    let ds = Dataset::from_dataframe(df, Some(parts), Some(buckets), None);
     println!("Creating dataset from dataframe took: {} ms", start.elapsed().unwrap().as_millis());
 
     let start = SystemTime::now();

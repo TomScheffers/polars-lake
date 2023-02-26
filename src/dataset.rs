@@ -1,41 +1,56 @@
 use polars::prelude::*;
 use rayon::prelude::*;
+use std::path::Path;
 use std::path::PathBuf;
 use std::fs;
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 use serde_json;
 use serde::{Serialize, Deserialize};
 
-use crate::storage::DatasetStorage;
+use crate::storage::{DatasetStorage, extract_files};
+use crate::buckets::series_to_bucket;
+
+pub enum Frame {
+    DataFrame(DataFrame),
+    LazyFrame(LazyFrame)
+}
 
 pub struct DatasetPart {
-    table: Option<DataFrame>, // For lazy loading
-    filters: Option<HashMap<String, String>>,
+    table: LazyFrame,
+    partitions: Option<HashMap<String, String>>,
+    bucket_by: Option<Vec<String>>,
+    bucket_nr: Option<usize>,
     path: Option<String>,
 }
 
 impl DatasetPart {
-    pub fn new( table: Option<DataFrame>, filters: Option<HashMap<String, String>>, path: Option<String>) -> Self {
-        Self { table, filters, path }
+    pub fn new( table: LazyFrame, partitions: Option<HashMap<String, String>>, bucket_by: Option<Vec<String>>, bucket_nr: Option<usize>, path: Option<String>) -> Self {
+        Self { table, partitions, bucket_by, bucket_nr, path }
     }
 
     pub fn load(self) -> Self {
         self
     }
 
-    pub fn partition_path(&self, partitions: &Option<Vec<String>>) -> String {
-        match &partitions {
+    pub fn partition_path(&self) -> String {
+        match &self.partitions {
             Some(partitions) => {
                 let mut parts = Vec::new();
-                for p in partitions {
-                    let v = self.filters.as_ref().unwrap().get(p).unwrap();
-                    parts.push(format!("{}={}", p, v));
+                for (k, v) in partitions.iter() {
+                    parts.push(format!("{}={}", k, v));
                 }
                 parts.join("/")
             },
             None => "".to_string()
+        } 
+    }
+
+    pub fn path(&self) -> String {
+        let folder = self.partition_path();
+        match self.bucket_nr {
+            Some(bn) => format!("{}/{:0>6}_file.parquet", folder, bn),
+            None => format!("{}/file.parquet", folder),
         }
     }
 }
@@ -54,62 +69,60 @@ impl Dataset {
         Self { partitions, buckets, parts, storage }
     }
 
-    pub fn from_dataframe(df: DataFrame, partitions: &Vec<String>, storage: Option<DatasetStorage>) -> Self {
-        let dfp = df.partition_by(partitions).unwrap();
+    pub fn from_dataframe(mut df: DataFrame, partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, storage: Option<DatasetStorage>) -> Self {
+        // Compute hash buckets if needed
+        let mut group_cols = partitions.clone().unwrap_or(Vec::new());
+        if let Some(ref bb) = buckets {
+            let mut arr = series_to_bucket(df.column(&bb[0]).unwrap(), 5);
+            arr.rename("$bucket");
+            df.with_column(arr).unwrap();
+            group_cols.push("$bucket".to_string());
+        }
+        
+        // Partition by
+        let dfp = df.partition_by(group_cols).unwrap();
         let parts = dfp
             .into_iter()
             .map(|x| {
-                // let filters = x
-                //     .get_column_names().into_iter().zip(x.get_row(0).unwrap().0.into_iter())
-                //     .filter(|(k, _)| partitions.contains(&k.clone().to_string()))
-                //     .map(|(k, v)| (k.clone().to_string(), v.get_str().unwrap_or("null")))
-                //     .collect::<HashMap<String, String>>();
-                // println!("{:?}", filters);
-                DatasetPart::new(Some(x), None, None)
+                let partition_values = match &partitions {
+                    Some(parts) => parts.iter().map(|p| (p.clone(), format!("{}", x.column(p).unwrap().get(0).unwrap()))).collect::<HashMap<String, String>>(),
+                    None => HashMap::new()
+                };
+                let bucket_nr = match &buckets {
+                    Some(_) => {
+                        let val = x.column("$bucket").unwrap().get(0).unwrap();
+                        match val {
+                            AnyValue::Int64(x) => Some(x as usize),
+                            _ => Some(0)                            
+                        }
+                    },
+                    None => None
+                };
+                DatasetPart::new(x.lazy(), Some(partition_values), buckets.clone(), bucket_nr, None)
             }).collect::<Vec<DatasetPart>>();
 
-        Self::new(Some(partitions.clone()), None, parts, storage)
+        Self::new(partitions.clone(), buckets, parts, storage)
     }
 
-    pub fn from_dataframe_old(df: DataFrame, partitions: &Vec<String>, storage: Option<DatasetStorage>) -> Self {
-        let start = SystemTime::now();
-        let dfg = df.groupby(partitions).unwrap();
-        let dfgg = dfg.groups().unwrap();
-        println!("Group by took: {} ms", start.elapsed().unwrap().as_millis());
+    pub fn upsert(self, df: DataFrame) {
+        // Split dataframe into dataset
+        let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone());
 
-        let partition_values = partitions.iter().map(|p| {
-            let c_arr = dfgg.column(p).unwrap().cast(&DataType::Utf8).unwrap();
-            c_arr.utf8().unwrap().into_iter().flat_map(|x| x.into_iter()).map(|v| v.to_string()).collect::<Vec<String>>()
-        }).collect::<Vec<Vec<String>>>();
-        let values = (0..dfgg.height()).map(|i| (0..partitions.len()).map(|j| &partition_values[j][i]).collect()).collect::<Vec<Vec<&String>>>();
-
-        let parts = values.into_iter().zip(dfgg.column("groups").unwrap().iter()).map(|(vals, idx)| {
-            match idx {
-                AnyValue::List(x) => {
-                    let table = df.take(x.u32().unwrap()).unwrap();
-                    let filters = partitions.clone().into_iter().zip(vals.into_iter().map(|v| v.clone())).collect::<HashMap<String, String>>();
-                    DatasetPart::new(Some(table), Some(filters), None)
+        // Align parts of self & other
+        let _part_map = &other.parts
+            .iter()
+            .map(|other_part| {
+                let matches = self.parts.iter().enumerate().filter(|(_, self_parts)| (other_part.partitions == self_parts.partitions) & (other_part.bucket_nr == self_parts.bucket_nr)).map(|(i, _)| i).collect::<Vec<usize>>();
+                if matches.len() > 0 {
+                    Some(matches[0])
+                } else {
+                    None                    
                 }
-                _ => panic!("Can only get List of u32 in groups")
-            }
-        }).collect::<Vec<DatasetPart>>();
-
-        Self::new(Some(partitions.clone()), None, parts, storage)
+            })
+            .collect::<Vec<Option<usize>>>();
     }
-
    
     // IO RELATED
-    // pub fn from_storage(root: &String, lazy: bool) -> Self {
-    //     let fpath = format!("{root}/manifest.json");
-    //     let contents = std::fs::read_to_string(&fpath).expect("Could not read manifest file in given root");
-    //     let mut obj = serde_json::from_str::<Self>(&contents).expect("Issue in deserialization of manifest");
-
-    //     // Lazy load underlying parts
-    //     let contains = "parquet".to_string();
-    //     obj.parts = find_parts(&obj.storage.as_ref().unwrap().root, &contains, lazy);
-    //     obj
-    // }
-
     pub fn with_storage(mut self, storage: Option<DatasetStorage>) -> Self {
         self.storage = storage;
         self
@@ -130,17 +143,13 @@ impl Dataset {
                 let _ = self.parts
                     .par_iter()
                     .map(|p| {
-                        match &p.table {
-                            Some(t) => {
-                                let partition_path = format!("{}/{}", storage.root, p.partition_path(&self.partitions));
-                                fs::create_dir_all(&partition_path).expect("Create dir failed");
-    
-                                let file_path = format!("{}/{}/file.parquet", storage.root, p.partition_path(&self.partitions));
-                                let file_pathbuf = PathBuf::from(file_path);
-                                t.clone().lazy().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
-                            }
-                            None => println!("Table has not been loaded yet!")
+                        if let Some(_) = &self.partitions {
+                            let partition_path = format!("{}/{}", storage.root, p.partition_path());
+                            fs::create_dir_all(&partition_path).expect("Create dir failed");
                         }
+                        let file_path = format!("{}/{}", storage.root, p.path());
+                        let file_pathbuf = PathBuf::from(file_path);
+                        p.table.clone().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
                     })
                     .collect::<()>();
             },
@@ -148,4 +157,52 @@ impl Dataset {
         }
     }
 
+    pub fn from_storage(root: &String) -> Self {
+        let manifest_path = format!("{root}/manifest.json");
+        let contents = std::fs::read_to_string(&manifest_path).expect("Could not read manifest file in given root");
+        let mut obj = serde_json::from_str::<Self>(&contents).expect("Issue in deserialization of manifest");
+
+        // Load underlying parts\
+        let contains = ".parquet".to_string();
+        match obj.storage {
+            Some(ref storage) => {
+                let mut empty = Vec::new();
+                let root_files = extract_files(&Path::new(&storage.root), &contains, &mut empty);
+            
+                obj.parts = root_files 
+                    .par_iter()
+                    .map(|path| {
+                        let mut partitions = HashMap::new();
+                        for v in path.split("/").collect::<Vec<&str>>() {
+                            if v.contains("=") {
+                                let arr = v.split("=").collect::<Vec<&str>>();
+                                partitions.insert(arr[0].to_string(), arr[1].to_string());
+                            }
+                        }
+                        
+                        let bucket_by = &obj.buckets;
+                        let bucket_nr = match obj.buckets {
+                            Some(_) => {
+                                let mut i = 0;
+                                loop {
+                                    if path.chars().skip(storage.root.len() + 1).nth(i).unwrap() != '0' {
+                                        break Some(path.chars().skip(storage.root.len() + 1 + i).take(6 - i).collect::<String>().parse::<usize>().unwrap()) //path[i..6].parse::<usize>().unwrap())
+                                    }
+                                    i += 1;
+                                    if i == 6 {
+                                        break Some(0)
+                                    }
+                                }
+                            },
+                            None => None
+                        };
+                        let table = LazyFrame::scan_parquet(path, ScanArgsParquet::default()).expect("Cannot read parquet file");
+                        DatasetPart::new(table, Some(partitions), bucket_by.clone(), bucket_nr, Some(path.clone()))
+                    })
+                    .collect::<Vec<DatasetPart>>();
+            },
+            None => println!("Cannot load parts because StorageOptions are not present")
+        };
+        obj
+    }
 }
