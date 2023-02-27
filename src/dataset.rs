@@ -29,8 +29,37 @@ impl DatasetPart {
         Self { table, partitions, bucket_by, bucket_nr, path }
     }
 
-    pub fn load(self) -> Self {
+    pub fn with_root(mut self, root: &String) -> Self {
+        self.path = Some(format!("{}/{}", root, self.file_path()));
         self
+    }
+
+    pub fn upsert(&self, other: DatasetPart, keys: Vec<String>) -> Self {
+        let keys_col = keys.iter().map(|c| col(c)).collect::<Vec<Expr>>();
+        let coalesce_exp = self.table.schema().unwrap().iter_names()
+            .map(|n| {
+                if keys.contains(n) {
+                    col(n)
+                } else {
+                    coalesce(&[col(&format!("{}_right", n)), col(n)]).alias(n)
+                }
+            })
+            .collect::<Vec<Expr>>();
+
+        // Materialize both
+        let left = self.table.clone().cache();
+        let right = other.table.clone().cache();
+
+        // Coalesce matches
+        let df_left = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinType::Left);
+        let df_match = df_left.select(coalesce_exp);
+
+        // Only left or right
+        let df_no_match = right.clone().join(left.clone(), keys_col.clone(), keys_col.clone(), JoinType::Anti);
+
+        let df_new = concat([df_match, df_no_match], true, true).unwrap();
+
+        Self { table: df_new, partitions: self.partitions.clone(), bucket_by: self.bucket_by.clone(), bucket_nr: self.bucket_nr, path: self.path.clone()}
     }
 
     pub fn partition_path(&self) -> String {
@@ -46,12 +75,24 @@ impl DatasetPart {
         } 
     }
 
-    pub fn path(&self) -> String {
+    pub fn file_path(&self) -> String {
         let folder = self.partition_path();
         match self.bucket_nr {
             Some(bn) => format!("{}/{:0>6}_file.parquet", folder, bn),
             None => format!("{}/file.parquet", folder),
         }
+    }
+
+    pub fn save(&self) {
+        match &self.path {
+            Some(p) => {
+                let file_pathbuf = PathBuf::from(p);
+                let df = self.table.clone().collect().unwrap();
+                println!("Saving df of size {:?}", df.shape());
+                df.lazy().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
+            },
+            None => println!("Cannnot save as path is not set")
+        };
     }
 }
 
@@ -98,18 +139,22 @@ impl Dataset {
                     },
                     None => None
                 };
-                DatasetPart::new(x.lazy(), Some(partition_values), buckets.clone(), bucket_nr, None)
+                let part = DatasetPart::new(x.lazy(), Some(partition_values), buckets.clone(), bucket_nr, None);
+                match &storage {
+                    Some(s) => part.with_root(&s.root),
+                    None => part
+                }
             }).collect::<Vec<DatasetPart>>();
 
         Self::new(partitions.clone(), buckets, parts, storage)
     }
 
-    pub fn upsert(self, df: DataFrame) {
+    pub fn upsert(self, df: DataFrame, keys: Vec<String>) {
         // Split dataframe into dataset
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone());
 
         // Align parts of self & other
-        let _part_map = &other.parts
+        let part_map = &other.parts
             .iter()
             .map(|other_part| {
                 let matches = self.parts.iter().enumerate().filter(|(_, self_parts)| (other_part.partitions == self_parts.partitions) & (other_part.bucket_nr == self_parts.bucket_nr)).map(|(i, _)| i).collect::<Vec<usize>>();
@@ -120,6 +165,23 @@ impl Dataset {
                 }
             })
             .collect::<Vec<Option<usize>>>();
+
+        println!("{:?}", part_map);
+
+        let parts = other.parts
+            .into_iter()
+            .zip(part_map)
+            .map(|(other_part, sidx)| {
+                match sidx {
+                    Some(idx) => self.parts.get(*idx).unwrap().upsert(other_part, keys.clone()),
+                    None => other_part,
+                }
+            })
+            .collect::<Vec<DatasetPart>>();
+
+        for p in parts {
+            p.save()
+        };
     }
    
     // IO RELATED
@@ -147,7 +209,7 @@ impl Dataset {
                             let partition_path = format!("{}/{}", storage.root, p.partition_path());
                             fs::create_dir_all(&partition_path).expect("Create dir failed");
                         }
-                        let file_path = format!("{}/{}", storage.root, p.path());
+                        let file_path = format!("{}/{}", storage.root, p.file_path());
                         let file_pathbuf = PathBuf::from(file_path);
                         p.table.clone().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
                     })
