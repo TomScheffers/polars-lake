@@ -14,23 +14,23 @@ use crate::storage::*;
 fn main() {
     toggle_string_cache(true);
 
-    // let start = SystemTime::now();
-    // let args = ScanArgsParquet::default();
-    // let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
-    // println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
+    let start = SystemTime::now();
+    let args = ScanArgsParquet::default();
+    let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+    println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
 
-    // // Dataset from DataFrame
-    // let start = SystemTime::now();
-    // let parts = Vec::new(); //vec!["org_key".to_string()];
-    // let buckets = vec!["sku_key".to_string()];
-    // let ds = Dataset::from_dataframe(df, Some(parts), Some(buckets), None);
-    // println!("Creating dataset from dataframe took: {} ms", start.elapsed().unwrap().as_millis());
+    // Dataset from DataFrame
+    let start = SystemTime::now();
+    let parts = Vec::new(); //vec!["org_key".to_string()];
+    let buckets = vec!["sku_key".to_string()];
+    let ds = Dataset::from_dataframe(df, Some(parts), Some(buckets), None);
+    println!("Creating dataset from dataframe took: {} ms", start.elapsed().unwrap().as_millis());
 
-    // let start = SystemTime::now();
-    // let store = DatasetStorage::new("data/stock_parts".to_string(), Format::Parquet, Some(Compression::Snappy));
-    // let ds = ds.with_storage(Some(store));
-    // ds.to_storage();
-    // println!("Saving dataset took: {} ms", start.elapsed().unwrap().as_millis());
+    let start = SystemTime::now();
+    let store = DatasetStorage::new("data/stock_parts".to_string(), Format::Parquet, Some(Compression::Snappy));
+    let ds = ds.with_storage(Some(store));
+    ds.to_storage();
+    println!("Saving dataset took: {} ms", start.elapsed().unwrap().as_millis());
 
     let start = SystemTime::now();
     let ds = Dataset::from_storage(&"data/stock_parts".to_string()); // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
