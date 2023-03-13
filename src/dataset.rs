@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::fs;
 use std::collections::HashMap;
+use anyhow::Result;
 
 use serde_json;
 use serde::{Serialize, Deserialize};
@@ -110,18 +111,18 @@ impl Dataset {
         Self { partitions, buckets, parts, storage }
     }
 
-    pub fn from_dataframe(mut df: DataFrame, partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, storage: Option<DatasetStorage>) -> Self {
+    pub fn from_dataframe(mut df: DataFrame, partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, storage: Option<DatasetStorage>) -> Result<Self> {
         // Compute hash buckets if needed
         let mut group_cols = partitions.clone().unwrap_or(Vec::new());
         if let Some(ref bb) = buckets {
-            let mut arr = series_to_bucket(df.column(&bb[0]).unwrap(), 5);
+            let mut arr = series_to_bucket(df.column(&bb[0]).unwrap(), 5)?;
             arr.rename("$bucket");
-            df.with_column(arr).unwrap();
+            df.with_column(arr)?;
             group_cols.push("$bucket".to_string());
         }
         
         // Partition by
-        let dfp = df.partition_by(group_cols).unwrap();
+        let dfp = df.partition_by(group_cols)?;
         let parts = dfp
             .into_iter()
             .map(|x| {
@@ -146,12 +147,12 @@ impl Dataset {
                 }
             }).collect::<Vec<DatasetPart>>();
 
-        Self::new(partitions.clone(), buckets, parts, storage)
+        Ok(Self::new(partitions.clone(), buckets, parts, storage))
     }
 
-    pub fn upsert(self, df: DataFrame, keys: Vec<String>) {
+    pub fn upsert(self, df: DataFrame, keys: Vec<String>) -> Result<Self> {
         // Split dataframe into dataset
-        let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone());
+        let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
         // Align parts of self & other
         let part_map = &other.parts
@@ -166,9 +167,7 @@ impl Dataset {
             })
             .collect::<Vec<Option<usize>>>();
 
-        println!("{:?}", part_map);
-
-        let parts = other.parts
+        let mut new_parts = other.parts
             .into_iter()
             .zip(part_map)
             .map(|(other_part, sidx)| {
@@ -179,9 +178,15 @@ impl Dataset {
             })
             .collect::<Vec<DatasetPart>>();
 
-        for p in parts {
+        for p in &new_parts {
             p.save()
         };
+
+        // Combine parts
+        let untouched_parts = self.parts.into_iter().enumerate().filter(|(i, _)| !part_map.contains(&Some(*i))).map(|(_, p)| p).collect::<Vec<DatasetPart>>();
+        new_parts.extend(untouched_parts);
+
+        Ok(Self::new(self.partitions.clone(), self.buckets.clone(), new_parts, self.storage.clone()))
     }
    
     // IO RELATED
@@ -219,10 +224,10 @@ impl Dataset {
         }
     }
 
-    pub fn from_storage(root: &String) -> Self {
+    pub fn from_storage(root: &String) -> Result<Self> {
         let manifest_path = format!("{root}/manifest.json");
-        let contents = std::fs::read_to_string(&manifest_path).expect("Could not read manifest file in given root");
-        let mut obj = serde_json::from_str::<Self>(&contents).expect("Issue in deserialization of manifest");
+        let contents = std::fs::read_to_string(&manifest_path)?;
+        let mut obj = serde_json::from_str::<Self>(&contents)?;
 
         // Load underlying parts\
         let contains = ".parquet".to_string();
@@ -258,13 +263,13 @@ impl Dataset {
                             },
                             None => None
                         };
-                        let table = LazyFrame::scan_parquet(path, ScanArgsParquet::default()).expect("Cannot read parquet file");
+                        let table = LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap();
                         DatasetPart::new(table, Some(partitions), bucket_by.clone(), bucket_nr, Some(path.clone()))
                     })
                     .collect::<Vec<DatasetPart>>();
             },
             None => println!("Cannot load parts because StorageOptions are not present")
         };
-        obj
+        Ok(obj)
     }
 }
