@@ -1,7 +1,6 @@
 use polars::prelude::*;
 use rayon::prelude::*;
 use std::path::Path;
-use std::path::PathBuf;
 use std::fs;
 use std::collections::HashMap;
 use anyhow::Result;
@@ -35,7 +34,7 @@ impl DatasetPart {
         self
     }
 
-    pub fn upsert(&self, other: DatasetPart, keys: Vec<String>) -> Self {
+    pub fn upsert(&self, other: DatasetPart, keys: Vec<String>) -> Result<Self> {
         let keys_col = keys.iter().map(|c| col(c)).collect::<Vec<Expr>>();
         let coalesce_exp = self.table.schema().unwrap().iter_names()
             .map(|n| {
@@ -58,9 +57,11 @@ impl DatasetPart {
         // Only left or right
         let df_no_match = right.clone().join(left.clone(), keys_col.clone(), keys_col.clone(), JoinType::Anti);
 
-        let df_new = concat([df_match, df_no_match], true, true).unwrap();
+        let df_new = concat([df_match, df_no_match], true, true)?;
 
-        Self { table: df_new, partitions: self.partitions.clone(), bucket_by: self.bucket_by.clone(), bucket_nr: self.bucket_nr, path: self.path.clone()}
+        let df_final = df_new.collect()?.lazy();
+
+        Ok(Self { table: df_final, partitions: self.partitions.clone(), bucket_by: self.bucket_by.clone(), bucket_nr: self.bucket_nr, path: self.path.clone()})
     }
 
     pub fn partition_path(&self) -> String {
@@ -84,16 +85,17 @@ impl DatasetPart {
         }
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<()> {
         match &self.path {
             Some(p) => {
-                let file_pathbuf = PathBuf::from(p);
-                let df = self.table.clone().collect().unwrap();
+                let mut df = self.table.clone().collect()?;
+                let mut file = std::io::BufWriter::new(std::fs::File::create(p)?);
                 println!("Saving df of size {:?}", df.shape());
-                df.lazy().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
+                ParquetWriter::new(&mut file).finish(&mut df)?;
             },
             None => println!("Cannnot save as path is not set")
         };
+        Ok(())
     }
 }
 
@@ -172,15 +174,13 @@ impl Dataset {
             .zip(part_map)
             .map(|(other_part, sidx)| {
                 match sidx {
-                    Some(idx) => self.parts.get(*idx).unwrap().upsert(other_part, keys.clone()),
+                    Some(idx) => self.parts.get(*idx).unwrap().upsert(other_part, keys.clone()).unwrap(),
                     None => other_part,
                 }
             })
             .collect::<Vec<DatasetPart>>();
 
-        for p in &new_parts {
-            p.save()
-        };
+        let _ = &new_parts.par_iter().map(|p| p.save()).collect::<Vec<Result<()>>>();
 
         // Combine parts
         let untouched_parts = self.parts.into_iter().enumerate().filter(|(i, _)| !part_map.contains(&Some(*i))).map(|(_, p)| p).collect::<Vec<DatasetPart>>();
@@ -195,7 +195,7 @@ impl Dataset {
         self
     }
 
-    pub fn to_storage(&self) {
+    pub fn to_storage(self) {
         match &self.storage {
             Some(storage) => {
                 // Create & clear directory
@@ -208,15 +208,13 @@ impl Dataset {
 
                 // Save underlying parts
                 let _ = self.parts
-                    .par_iter()
+                    .into_par_iter()
                     .map(|p| {
-                        if let Some(_) = &self.partitions {
-                            let partition_path = format!("{}/{}", storage.root, p.partition_path());
-                            fs::create_dir_all(&partition_path).expect("Create dir failed");
-                        }
-                        let file_path = format!("{}/{}", storage.root, p.file_path());
-                        let file_pathbuf = PathBuf::from(file_path);
-                        p.table.clone().sink_parquet(file_pathbuf, ParquetWriteOptions::default()).unwrap();
+                        let p = p.with_root(&storage.root);
+                        match p.save() {
+                            Ok(_) => {},
+                            Err(e) => println!("Saving failed: {:?}", e)
+                        };
                     })
                     .collect::<()>();
             },
@@ -271,5 +269,60 @@ impl Dataset {
             None => println!("Cannot load parts because StorageOptions are not present")
         };
         Ok(obj)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::*;
+    use std::time::SystemTime;
+    use polars::toggle_string_cache;
+
+    #[test]
+    fn create_dataset() -> Result<()> {
+        toggle_string_cache(true);
+
+        let start = SystemTime::now();
+        let args = ScanArgsParquet::default();
+        let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args)?.collect()?; 
+        println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
+    
+        // Dataset from DataFrame
+        let start = SystemTime::now();
+        let parts = Vec::new(); //vec!["org_key".to_string()];
+        let buckets = vec!["sku_key".to_string()];
+        let ds = Dataset::from_dataframe(df, Some(parts), Some(buckets), None)?;
+        println!("Creating dataset from dataframe took: {} ms", start.elapsed().unwrap().as_millis());
+    
+        let start = SystemTime::now();
+        let store = DatasetStorage::new("data/stock_parts".to_string(), Format::Parquet, Some(Compression::Snappy));
+        let ds = ds.with_storage(Some(store));
+        ds.to_storage();
+        println!("Saving dataset took: {} ms", start.elapsed().unwrap().as_millis());
+
+        let start = SystemTime::now();
+        let ds = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+        println!("Reading dataset took: {} ms.", start.elapsed().unwrap().as_millis());
+    
+        let start = SystemTime::now();
+        let args = ScanArgsParquet::default();
+        let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args)?.collect()?; 
+        println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
+    
+        let start = SystemTime::now();
+        let dfu = df.head(Some(10000));
+        let keys = vec!["store_key".to_string(), "sku_key".to_string()];
+        let ds = ds.upsert(dfu, keys)?;
+        println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
+
+        let start = SystemTime::now();
+        let dfu = df.head(Some(1));
+        let keys = vec!["store_key".to_string(), "sku_key".to_string()];
+        let _ = ds.upsert(dfu, keys)?;
+        println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
+
+        Ok(())
     }
 }

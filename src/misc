@@ -1,0 +1,12 @@
+    // Utf8 to Struct
+
+    // let props = df.column("properties").unwrap().utf8();
+    // let iter = props.into_iter().flat_map(|x| x.into_iter()).map(|v| v.unwrap_or("null"));
+    // let dtype = ndjson::read::infer_iter(iter.take(10)).unwrap();
+    // println!("{:?}", dtype);
+
+    // let start = SystemTime::now();
+    // let props = df.column("properties").unwrap().utf8();
+    // let iter = props.into_iter().flat_map(|x| x.into_iter()).map(|v| v.unwrap_or("null"));
+    // let _array = ndjson::read::deserialize_iter(iter.take(1000), dtype).unwrap();
+    // println!("Reading JSON column took: {} ms", start.elapsed().unwrap().as_millis());
