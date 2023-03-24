@@ -16,6 +16,7 @@ pub enum Frame {
     LazyFrame(LazyFrame)
 }
 
+#[derive(Clone)]
 pub struct DatasetPart {
     table: LazyFrame,
     partitions: Option<HashMap<String, String>>,
@@ -152,7 +153,7 @@ impl Dataset {
         Ok(Self::new(partitions.clone(), buckets, parts, storage))
     }
 
-    pub fn upsert(self, df: DataFrame, keys: Vec<String>) -> Result<Self> {
+    pub fn upsert(&mut self, df: DataFrame, keys: Vec<String>, save: bool) -> Result<Self> {
         // Split dataframe into dataset
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
@@ -179,11 +180,13 @@ impl Dataset {
                 }
             })
             .collect::<Vec<DatasetPart>>();
-
-        let _ = &new_parts.par_iter().map(|p| p.save()).collect::<Vec<Result<()>>>();
+        
+        if save {
+            let _ = &new_parts.par_iter().map(|p| p.save()).collect::<Vec<Result<()>>>();
+        }
 
         // Combine parts
-        let untouched_parts = self.parts.into_iter().enumerate().filter(|(i, _)| !part_map.contains(&Some(*i))).map(|(_, p)| p).collect::<Vec<DatasetPart>>();
+        let untouched_parts = self.parts.iter().enumerate().filter(|(i, _)| !part_map.contains(&Some(*i))).map(|(_, p)| p.clone()).collect::<Vec<DatasetPart>>();
         new_parts.extend(untouched_parts);
 
         Ok(Self::new(self.partitions.clone(), self.buckets.clone(), new_parts, self.storage.clone()))
@@ -303,7 +306,7 @@ mod tests {
         println!("Saving dataset took: {} ms", start.elapsed().unwrap().as_millis());
 
         let start = SystemTime::now();
-        let ds = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+        let mut ds = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
         println!("Reading dataset took: {} ms.", start.elapsed().unwrap().as_millis());
     
         let start = SystemTime::now();
@@ -314,13 +317,13 @@ mod tests {
         let start = SystemTime::now();
         let dfu = df.head(Some(10000));
         let keys = vec!["store_key".to_string(), "sku_key".to_string()];
-        let ds = ds.upsert(dfu, keys)?;
+        let mut ds = ds.upsert(dfu, keys, true)?;
         println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
 
         let start = SystemTime::now();
         let dfu = df.head(Some(1));
         let keys = vec!["store_key".to_string(), "sku_key".to_string()];
-        let _ = ds.upsert(dfu, keys)?;
+        let _ = ds.upsert(dfu, keys, false)?;
         println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
 
         Ok(())
