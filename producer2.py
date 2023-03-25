@@ -1,14 +1,14 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
-from time import sleep
-import io, socket, random
+import io, socket
 import numpy as np
 
 # Load data
 ts = pq.read_table("data/stock_current/org_key=1/file.parquet")
 
 for i in range(5):
-    idxs, = np.where(ts.column('sku_key').to_numpy() % 5 == i) #np.random.choice(np.arange(ts.num_rows), size=10000, replace=False)
+    idxs, = np.where(ts.column('sku_key').to_numpy() % 5 == i)
+    # idxs = np.random.choice(np.arange(ts.num_rows), size=10000, replace=False)
     t = ts.take(idxs)
     print(t.shape)
 

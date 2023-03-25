@@ -103,12 +103,12 @@ pub struct Dataset {
     pub partitions: Option<Vec<String>>, // File based partitioning columns
     pub buckets: Option<Vec<String>>, // Hash bucketing columns (within partitions)
     #[serde(skip_serializing, skip_deserializing)]
-    pub parts: RwLock<Vec<DatasetPart>>, // Underlying parts (referencing to tables)
+    pub parts: RwLock<HashMap<String, DatasetPart>>, // Underlying parts (referencing to tables)
     pub storage: Option<DatasetStorage> // Storage options
 }
 
 impl Dataset {
-    pub fn new(partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, parts: RwLock<Vec<DatasetPart>>, storage: Option<DatasetStorage>) -> Self {
+    pub fn new(partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, parts: RwLock<HashMap<String, DatasetPart>>, storage: Option<DatasetStorage>) -> Self {
         Self { partitions, buckets, parts, storage }
     }
 
@@ -142,11 +142,12 @@ impl Dataset {
                     None => None
                 };
                 let part = DatasetPart::new(x.lazy(), Some(partition_values), buckets.clone(), bucket_nr, None);
+                let path = part.file_path();
                 match &storage {
-                    Some(s) => part.with_root(&s.root),
-                    None => part
+                    Some(s) => (path, part.with_root(&s.root)),
+                    None => (path, part)
                 }
-            }).collect::<Vec<DatasetPart>>();
+            }).collect::<HashMap<String, DatasetPart>>();
 
         Ok(Self::new(partitions.clone(), buckets, RwLock::new(parts), storage))
     }
@@ -155,45 +156,28 @@ impl Dataset {
         // Split dataframe into dataset
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
-        // Align parts of self & other
-        let part_map = &other.parts.read().unwrap()
-            .par_iter()
-            .map(|other_part| {
-                let matches = self.parts.read().unwrap().iter().enumerate().filter(|(_, self_parts)| (other_part.partitions == self_parts.partitions) & (other_part.bucket_nr == self_parts.bucket_nr)).map(|(i, _)| i).collect::<Vec<usize>>();
-                if matches.len() > 0 {
-                    Some(matches[0])
-                } else {
-                    None                    
-                }
-            })
-            .collect::<Vec<Option<usize>>>();
-
-        // Upsert into parts and keep idxs which are changes for saving
-        let idxs = other.parts.into_inner().unwrap()
+        // Upsert into parts and keep paths which are changes for saving
+        let paths = other.parts.into_inner().unwrap()
             .into_iter()
-            .zip(part_map)
-            .map(|(other_part, sidx)| {
-                match sidx {
-                    Some(idx) => {
-                        self.parts.read().unwrap().get(*idx).unwrap().upsert(other_part, keys.clone())?;
-                        Ok(*idx)
-                    },
+            .map(|(other_path, other_part)| {
+                let parts = self.parts.read().unwrap();
+                match parts.get(&other_path) {
+                    Some(sp) => {
+                        sp.upsert(other_part, keys.clone()).unwrap();
+                    }, 
                     None => {
-                        self.parts.write().unwrap().push(other_part);
-                        Ok(self.parts.read().unwrap().len())
-                    },
+                        self.parts.write().unwrap().insert(other_path.clone(), other_part);
+                    }
                 }
+                other_path
             })
-            .collect::<Vec<Result<usize>>>();
+            .collect::<Vec<String>>();
         
         if save {
             match &self.storage {
                 Some(s) => {
-                    idxs.into_par_iter().for_each(|idx| {
-                        match idx {
-                            Ok(i) => self.parts.read().unwrap().get(i).unwrap().save(&s.root).unwrap(),
-                            Err(_) => {}
-                        }
+                    paths.into_par_iter().for_each(|path| {
+                        self.parts.read().unwrap().get(&path).unwrap().save(&s.root).unwrap()
                     })
                 },
                 None => println!("No storage options set for saving")
@@ -222,7 +206,7 @@ impl Dataset {
                 // Save underlying parts
                 let _ = self.parts.read().unwrap()
                     .par_iter()
-                    .map(|p| {
+                    .map(|(_, p)| {
                         p.save(&storage.root)?;
                         Ok(())
                     })
@@ -273,9 +257,11 @@ impl Dataset {
                             None => None
                         };
                         let table = LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap();
-                        DatasetPart::new(table, Some(partitions), bucket_by.clone(), bucket_nr, Some(path.clone()))
+                        let part = DatasetPart::new(table, Some(partitions), bucket_by.clone(), bucket_nr, Some(path.clone()));
+                        let path = part.file_path();
+                        (path, part)
                     })
-                    .collect::<Vec<DatasetPart>>());
+                    .collect::<HashMap<String, DatasetPart>>());
             },
             None => println!("Cannot load parts because StorageOptions are not present")
         };
