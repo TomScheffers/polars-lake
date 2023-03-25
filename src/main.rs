@@ -9,8 +9,8 @@ use anyhow::Result;
 use std::{
     net::{TcpListener, TcpStream},
     thread,
-    time::Duration,
-    sync::{RwLock, Mutex},
+    time::{SystemTime, Duration},
+    sync::RwLock,
     collections::HashMap,
 };
 
@@ -20,40 +20,57 @@ mod buckets;
 
 use dataset::Dataset;
 
+// TODO:
+
+// Server:
+// Switch to Rocket as a server (with smart routes)
+
+// Upsert:
+// Existing dataset: 1. Split upsert df into dataset, 2. align dataset parts, 3.1. existing piece: get lock on dataset part + upsert (+ save if needed), 3.2 new piece: get lock on dataset to append new part
+
+// General:
+// Add delete operation (anti right)
+// Add drop duplicates (when creating part within dataset if keys present)
+// Add schema evolution (upsert contains more / less columns than current dataset)
+// Add CREATED_AT & CHANGED_AT columns + update in upsert
+// Add S3 storage locations
+
 fn main() -> Result<()> {
     toggle_string_cache(true);
-
-    // Mutex testing
-    let m = RwLock::new(0);
-    let a = m.read().unwrap();
-    println!("{}", a);
 
     // Load stock_current dataset
     let sc = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
 
     // Create a mapping of dataset to share between threads
-    let mut datasets_map: HashMap<String, Mutex<Dataset>> = HashMap::new();
-    datasets_map.insert("stock_current".to_string(), Mutex::new(sc));
+    let mut datasets_map: HashMap<String, RwLock<Dataset>> = HashMap::new();
+    datasets_map.insert("stock_current".to_string(), RwLock::new(sc));
     let datasets = Arc::new(datasets_map);
 
     // Listen on port for ipc streams of chunks
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-        stream_into_dataset(stream, &datasets)?;
+        let ldatasets = datasets.clone();
+        thread::spawn(|| {
+            let r = stream_into_dataset(stream, ldatasets);
+            match r {
+                Ok(_) => println!("Upsert succes"),
+                Err(_) => println!("Error in upsert")
+            }
+        });
     }
     Ok(())
 }
 
-fn stream_into_dataset(stream: TcpStream, datasets: &Arc<HashMap<String, Mutex<Dataset>>>) -> Result<()> {
+fn stream_into_dataset(stream: TcpStream, datasets: Arc<HashMap<String, RwLock<Dataset>>>) -> Result<()> {
+    let start = SystemTime::now();
     // let metadata = read::read_stream_metadata(&mut stream)?;
+    let table = "stock_current";
     let df = stream_to_df(stream)?.collect()?;
-    println!("{:?}", df);
     let keys = vec!["store_key".to_string(), "sku_key".to_string()];
-    let mut guard = datasets.as_ref().get("stock_current").unwrap().lock().unwrap();
-    let ds = (*guard).upsert(df, keys, false)?;
-    *guard = ds;
-
+    let ds = datasets.get(table).unwrap().read().unwrap();
+    ds.upsert(df, keys, true)?;
+    println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
     Ok(())
 }
 
