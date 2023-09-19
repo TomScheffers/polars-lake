@@ -42,7 +42,7 @@ pub fn extract_files<'a>(dir: &Path, contains: &String, files: &'a mut Vec<Strin
             if path.is_dir() {
                 extract_files(&path, contains, files);
             } else {
-                let file = path.to_str().unwrap().to_string();
+                let file = path.to_str().unwrap().to_string().replace("\\", "/");
                 if file.contains(contains) {
                     files.push(file);
                 }

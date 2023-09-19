@@ -23,12 +23,14 @@ pub struct DatasetPart {
     bucket_by: Option<Vec<String>>,
     bucket_nr: Option<usize>,
     path: Option<String>,
+    changes: RwLock<usize>,
 }
 
 impl DatasetPart {
     pub fn new( table: LazyFrame, partitions: Option<HashMap<String, String>>, bucket_by: Option<Vec<String>>, bucket_nr: Option<usize>, path: Option<String>) -> Self {
         let table = RwLock::new(table);
-        Self { table, partitions, bucket_by, bucket_nr, path }
+        let changes = RwLock::new(0);
+        Self { table, partitions, bucket_by, bucket_nr, path, changes }
     }
 
     pub fn with_root(mut self, root: &String) -> Self {
@@ -36,7 +38,7 @@ impl DatasetPart {
         self
     }
 
-    pub fn upsert(&self, other: DatasetPart, keys: Vec<String>) -> Result<&Self> {
+    pub fn upsert(&self, other: DatasetPart, keys: Vec<String>, collect: bool) -> Result<&Self> {
         let keys_col = keys.iter().map(|c| col(c)).collect::<Vec<Expr>>();
         let coalesce_exp = self.table.read().unwrap().schema().unwrap().iter_names()
             .map(|n| {
@@ -49,21 +51,28 @@ impl DatasetPart {
             .collect::<Vec<Expr>>();
 
         // Materialize both
-        let left = self.table.read().unwrap().clone().cache();
-        let right = other.table.read().unwrap().clone().cache();
+        let left = self.table.read().unwrap().clone(); //.cache();
+        let right = other.table.read().unwrap().clone(); //.cache();
 
-        // Coalesce matches
-        let df_left = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinType::Left);
-        let df_match = df_left.select(coalesce_exp);
+        // Outer join
+        let df_outer = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinType::Outer);
+        let df_new = df_outer.select(coalesce_exp);
 
-        // Only left or right
-        let df_no_match = right.clone().join(left.clone(), keys_col.clone(), keys_col.clone(), JoinType::Anti);
+        // Find rows which have changed
+        let rows_changed = right.collect()?.height();
 
-        // Create new lazy frame and overwrite value in RwLock
-        let mut lock = self.table.write().unwrap();
-        let df_new = concat([df_match, df_no_match], true, true)?;
-        *lock = df_new.collect()?.lazy();
-
+        // Replace in Mutex (collect if needed)
+        if collect | (self.changes.read().unwrap().clone() + rows_changed > 10000) {
+            let df = df_new.collect()?.lazy();
+            *self.table.write().unwrap() = df;
+            *self.changes.write().unwrap() = 0;
+        } else {
+            // let mut lock = self.table.write().unwrap();
+            *self.table.write().unwrap() = df_new; 
+            *self.changes.write().unwrap() += rows_changed;       
+        };
+        println!("Rows changed counter: {:?}", self.changes.read().unwrap().clone());
+        
         Ok(self)
     }
 
@@ -89,10 +98,12 @@ impl DatasetPart {
     }
 
     pub fn save(&self, root: &String) -> Result<()> {
+        let partition_root = format!("{}/{}", root, self.partition_path());
+        fs::create_dir_all(&partition_root)?;
         let path = format!("{}/{}", root, self.file_path());
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let mut df = self.table.read().unwrap().clone().collect()?;
-        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
-        println!("Saving df of size {:?}", df.shape());
+        println!("Saving df of size {:?} in path {:?}", df.shape(), path);
         ParquetWriter::new(&mut file).finish(&mut df)?;
         Ok(())
     }
@@ -163,7 +174,7 @@ impl Dataset {
                 let parts = self.parts.read().unwrap();
                 match parts.get(&other_path) {
                     Some(sp) => {
-                        sp.upsert(other_part, keys.clone()).unwrap();
+                        sp.upsert(other_part, keys.clone(), false).unwrap();
                     }, 
                     None => {
                         self.parts.write().unwrap().insert(other_path.clone(), other_part);
@@ -240,13 +251,14 @@ impl Dataset {
                             }
                         }
                         
+                        let file_name = path.split("/").last().unwrap();
                         let bucket_by = &obj.buckets;
                         let bucket_nr = match obj.buckets {
                             Some(_) => {
                                 let mut i = 0;
                                 loop {
-                                    if path.chars().skip(storage.root.len() + 1).nth(i).unwrap() != '0' {
-                                        break Some(path.chars().skip(storage.root.len() + 1 + i).take(6 - i).collect::<String>().parse::<usize>().unwrap()) //path[i..6].parse::<usize>().unwrap())
+                                    if file_name.chars().nth(i).unwrap() != '0' {
+                                        break Some(file_name.chars().skip(i).take(6 - i).collect::<String>().parse::<usize>().unwrap()) //path[i..6].parse::<usize>().unwrap())
                                     }
                                     i += 1;
                                     if i == 6 {
@@ -282,16 +294,15 @@ mod tests {
         toggle_string_cache(true);
 
         let start = SystemTime::now();
-        let args = ScanArgsParquet::default();
-        let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args)?.collect()?; 
+        let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", ScanArgsParquet::default())?.with_column(lit(1).alias("org_key")).collect()?; 
         println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
     
         // Dataset from DataFrame
         let start = SystemTime::now();
-        let parts = Vec::new(); //vec!["org_key".to_string()];
+        let parts = vec!["org_key".to_string()];
         let buckets = vec!["sku_key".to_string()];
-        let ds = Dataset::from_dataframe(df, Some(parts), Some(buckets), None)?;
-        println!("Creating dataset from dataframe took: {} ms", start.elapsed().unwrap().as_millis());
+        let ds = Dataset::from_dataframe(df.clone(), Some(parts), Some(buckets), None)?;
+        println!("Creating dataset from dataframe took: {} ms.", start.elapsed().unwrap().as_millis());
     
         let start = SystemTime::now();
         let store = DatasetStorage::new("data/stock_parts".to_string(), Format::Parquet, Some(Compression::Snappy));
@@ -302,11 +313,6 @@ mod tests {
         let start = SystemTime::now();
         let ds = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
         println!("Reading dataset took: {} ms.", start.elapsed().unwrap().as_millis());
-    
-        let start = SystemTime::now();
-        let args = ScanArgsParquet::default();
-        let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", args)?.collect()?; 
-        println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
     
         let start = SystemTime::now();
         let dfu = df.head(Some(300000));

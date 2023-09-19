@@ -5,7 +5,7 @@ import socket
 
 # Set up the data exchange socket
 sk = socket.socket()
-sk.connect(("127.0.0.1", 7878))
+sk.connect(("127.0.0.1", 12989))
 sk.listen()
 
 # Load data

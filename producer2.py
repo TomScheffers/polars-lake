@@ -1,15 +1,16 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
-import io, socket
+import io, socket, time
 import numpy as np
 
 # Load data
 ts = pq.read_table("data/stock_current/org_key=1/file.parquet")
+ts = ts.append_column("org_key", pa.array(np.ones(ts.num_rows, dtype=int)))
 
 for i in range(5):
-    idxs, = np.where(ts.column('sku_key').to_numpy() % 5 == i)
-    # idxs = np.random.choice(np.arange(ts.num_rows), size=10000, replace=False)
-    t = ts.take(idxs)
+    idxs, = np.where(ts.column('sku_key').to_numpy() % 5 == i % 5)
+    #idxs = np.random.choice(np.arange(ts.num_rows), size=10, replace=False)
+    t = ts.take(idxs[:10000])
     print(t.shape)
 
     # Schema
@@ -31,6 +32,6 @@ for i in range(5):
 
     # Set up the data exchange socket
     sk = socket.socket()
-    sk.connect(("127.0.0.1", 7878))
-    sk.send(bytes)
+    sk.connect(("127.0.0.1", 7879))
+    sk.send(bytes) 
     sk.close()
