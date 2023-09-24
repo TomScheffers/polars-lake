@@ -38,11 +38,36 @@ impl DatasetPart {
         self
     }
 
+    pub fn collect(&self) -> Result<&Self> {
+        let df_new = self.table.read().unwrap().clone().collect()?.lazy();
+        *self.table.write().unwrap() = df_new;
+        Ok(self)
+    }
+
+    pub fn insert(&self, other: DatasetPart, collect: bool) -> Result<&Self> {
+        // Materialize both
+        let left = self.table.read().unwrap().clone(); //.cache();
+        let right = other.table.read().unwrap().clone(); //.cache();
+        let rows_changed = right.clone().collect()?.height();
+        let df_new = concat([left, right], UnionArgs::default())?;
+
+        // Replace in Mutex (collect if needed)
+        if collect | (self.changes.read().unwrap().clone() + rows_changed > 10000) {
+            let df = df_new.collect()?.lazy();
+            *self.table.write().unwrap() = df;
+            *self.changes.write().unwrap() = 0;
+        } else {
+            *self.table.write().unwrap() = df_new; 
+            *self.changes.write().unwrap() += rows_changed;       
+        };        
+        Ok(self)
+    }
+
     pub fn upsert(&self, other: DatasetPart, keys: Vec<String>, collect: bool) -> Result<&Self> {
         let keys_col = keys.iter().map(|c| col(c)).collect::<Vec<Expr>>();
         let coalesce_exp = self.table.read().unwrap().schema().unwrap().iter_names()
             .map(|n| {
-                if keys.contains(n) {
+                if keys.contains(&n.as_str().to_string()) {
                     col(n)
                 } else {
                     coalesce(&[col(&format!("{}_right", n)), col(n)]).alias(n)
@@ -55,7 +80,7 @@ impl DatasetPart {
         let right = other.table.read().unwrap().clone(); //.cache();
 
         // Outer join
-        let df_outer = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinType::Outer);
+        let df_outer = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinArgs::new(JoinType::Outer));
         let df_new = df_outer.select(coalesce_exp);
 
         // Find rows which have changed
@@ -134,7 +159,7 @@ impl Dataset {
         }
         
         // Partition by
-        let dfp = df.partition_by(group_cols)?;
+        let dfp = df.partition_by(group_cols, true)?;
         let parts = dfp
             .into_iter()
             .map(|x| {
@@ -163,12 +188,54 @@ impl Dataset {
         Ok(Self::new(partitions.clone(), buckets, RwLock::new(parts), storage))
     }
 
+    pub fn to_lazyframe(&self) -> Result<LazyFrame> {
+        let frames = self.parts.read().unwrap().iter().map(|(_,f)| f.table.read().unwrap().clone()).collect::<Vec<LazyFrame>>();
+        Ok(concat(frames, UnionArgs::default())?)
+    }
+
+    pub fn collect(&self) -> Result<()> {
+        let _ = self.parts.read().unwrap()
+            .par_iter()
+            .map(|(_, p)| {
+                p.collect().unwrap();
+                None
+            })
+            .collect::<Vec<Option<()>>>();
+        Ok(())
+    }
+
+    pub fn insert(&self, df: DataFrame, save: bool) -> Result<()> {
+        // Split dataframe into dataset
+        let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
+
+        // Insert into parts and keep paths which are changes for saving
+        let _ = other.parts.into_inner().unwrap()
+            .into_iter()
+            .map(|(other_path, other_part)| {
+                let parts = self.parts.read().unwrap();
+                match parts.get(&other_path) {
+                    Some(sp) => {
+                        sp.insert(other_part, false).unwrap();
+                    }, 
+                    None => {
+                        self.parts.write().unwrap().insert(other_path.clone(), other_part);
+                    }
+                }
+                other_path
+            })
+            .collect::<Vec<String>>();
+        
+        if save { self.to_storage()? }
+        Ok(())
+    }
+
+
     pub fn upsert(&self, df: DataFrame, keys: Vec<String>, save: bool) -> Result<()> {
         // Split dataframe into dataset
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
         // Upsert into parts and keep paths which are changes for saving
-        let paths = other.parts.into_inner().unwrap()
+        let _ = other.parts.into_inner().unwrap()
             .into_iter()
             .map(|(other_path, other_part)| {
                 let parts = self.parts.read().unwrap();
@@ -184,16 +251,7 @@ impl Dataset {
             })
             .collect::<Vec<String>>();
         
-        if save {
-            match &self.storage {
-                Some(s) => {
-                    paths.into_par_iter().for_each(|path| {
-                        self.parts.read().unwrap().get(&path).unwrap().save(&s.root).unwrap()
-                    })
-                },
-                None => println!("No storage options set for saving")
-            }
-        }
+        if save { self.to_storage()? }
         Ok(())
     }
    
@@ -203,7 +261,7 @@ impl Dataset {
         self
     }
 
-    pub fn to_storage(self) -> Result<()> {
+    pub fn to_storage(&self) -> Result<()> {
         match &self.storage {
             Some(storage) => {
                 // Create & clear directory
@@ -228,7 +286,7 @@ impl Dataset {
         }
     }
 
-    pub fn from_storage(root: &String) -> Result<Self> {
+    pub fn from_storage(root: &String, load: bool) -> Result<Self> {
         let manifest_path = format!("{root}/manifest.json");
         let contents = std::fs::read_to_string(&manifest_path)?;
         let mut obj = serde_json::from_str::<Self>(&contents)?;
@@ -268,7 +326,11 @@ impl Dataset {
                             },
                             None => None
                         };
-                        let table = LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap();
+                        let table = if load {
+                            LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap().collect().unwrap().lazy()
+                        } else {
+                            LazyFrame::scan_parquet(path, ScanArgsParquet::default()).unwrap()
+                        };
                         let part = DatasetPart::new(table, Some(partitions), bucket_by.clone(), bucket_nr, Some(path.clone()));
                         let path = part.file_path();
                         (path, part)
@@ -287,12 +349,9 @@ mod tests {
     use super::*;
     use crate::storage::*;
     use std::time::SystemTime;
-    use polars::toggle_string_cache;
 
     #[test]
     fn create_dataset() -> Result<()> {
-        toggle_string_cache(true);
-
         let start = SystemTime::now();
         let df = LazyFrame::scan_parquet("data/stock_current/org_key=1/file.parquet", ScanArgsParquet::default())?.with_column(lit(1).alias("org_key")).collect()?; 
         println!("Reading table took: {} ms. Rows {:?}", start.elapsed().unwrap().as_millis(), df.shape());
@@ -311,7 +370,7 @@ mod tests {
         println!("Saving dataset took: {} ms", start.elapsed().unwrap().as_millis());
 
         let start = SystemTime::now();
-        let ds = Dataset::from_storage(&"data/stock_parts".to_string())?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
+        let ds = Dataset::from_storage(&"data/stock_parts".to_string(), false)?; // ("data/stock_current/org_key=1/file.parquet", args).unwrap().collect().unwrap(); 
         println!("Reading dataset took: {} ms.", start.elapsed().unwrap().as_millis());
     
         let start = SystemTime::now();

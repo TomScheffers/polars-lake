@@ -21,7 +21,7 @@ pub fn series_to_bucket(arr: &Series, buckets: u32) -> Result<Series> {
         DataType::Utf8    => {
             let rs = RandomState::new();
             let mut buf = Vec::new();
-            arr.utf8().unwrap().vec_hash(rs, &mut buf);
+            arr.utf8().unwrap().vec_hash(rs, &mut buf)?;
             Ok(Series::new(arr.name(), &buf))
         },
         DataType::Date => Ok(arr % buckets),

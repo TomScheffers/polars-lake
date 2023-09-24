@@ -1,24 +1,25 @@
 #![allow(dead_code)]
 
 use polars::prelude::*;
-use polars::toggle_string_cache;
-use polars::frame::DataFrame;
-use arrow2::io::ipc::read;
+use polars::enable_string_cache;
+use polars_io::ipc::IpcStreamReader;
 
 use anyhow::Result;
 
 use std::{
     net::{TcpListener, TcpStream},
     thread,
-    time::{SystemTime, Duration},
+    time::SystemTime,
     collections::HashMap,
 };
 
 mod dataset;
 mod storage;
 mod buckets;
+mod database;
 
 use dataset::Dataset;
+use database::Database;
 
 // Server:
 // Switch to Rocket as a server (with smart routes)
@@ -40,18 +41,30 @@ use dataset::Dataset;
 // Add S3 storage locations
 
 fn main() -> Result<()> {
-    toggle_string_cache(true);
+    enable_string_cache(true);
 
     // Load stock_current dataset
-    let sc = Dataset::from_storage(&"data/stock_parts".to_string())?;
+    let sc = Dataset::from_storage(&"data/stock_parts".to_string(), false)?;
 
     // Create a mapping of dataset to share between threads
     let mut datasets_map: HashMap<String, Dataset> = HashMap::new();
     datasets_map.insert("stock_current".to_string(), sc);
     let datasets = Arc::new(datasets_map);
 
+    // Database
+    let sc = Dataset::from_storage(&"data/stock_parts".to_string(), false)?;
+    let db = Database::new();
+    db.register("public".to_string(), "stock_current".to_string(), sc);
+
+    let start = SystemTime::now();
+    let df = db.execute_sql("SELECT * FROM stock_current WHERE store_key = 101;".to_string())?;
+    println!("SQL took: {} ms.", start.elapsed().unwrap().as_millis());
+    println!("{:?}", df);
+
+
     // Listen on port for ipc streams of chunks
     let listener = TcpListener::bind("127.0.0.1:7879").unwrap();
+    println!("Listening on port");
     for stream in listener.incoming() {
         let stream = stream.unwrap();
         let ldatasets = datasets.clone();
@@ -65,29 +78,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn stream_into_dataset(mut stream: TcpStream, datasets: Arc<HashMap<String, Dataset>>) -> Result<()> {
+fn stream_into_dataset(stream: TcpStream, datasets: Arc<HashMap<String, Dataset>>) -> Result<()> {
     let start = SystemTime::now();
-    let metadata = read::read_stream_metadata(&mut stream)?;
-    let md = (&metadata).schema.metadata.clone();
-    let table = md.get("table").unwrap();
-    let fields = (&metadata).schema.fields.clone();
+    let df = IpcStreamReader::new(stream).finish()?;
+    let ds = datasets.get("stock_current").unwrap();
     let keys = vec!["store_key".to_string(), "sku_key".to_string()];
-
-    // Read dataframes from stream and concatenate to one dataframe
-    let mut reader = read::StreamReader::new(stream, metadata, None);
-    loop {
-        match reader.next() {
-            Some(x) => match x? {
-                read::StreamState::Some(b) => {
-                    let df = DataFrame::try_from((b, fields.as_slice()))?;
-                    let ds = datasets.get(table).unwrap();
-                    ds.upsert(df, keys.clone(), false)?;
-                    println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
-                }
-                read::StreamState::Waiting => thread::sleep(Duration::from_millis(1)),
-            },
-            None => break
-        };
-    }
+    ds.upsert(df, keys.clone(), false)?;
+    println!("Upsert table took: {} ms.", start.elapsed().unwrap().as_millis());
     Ok(())
 }
