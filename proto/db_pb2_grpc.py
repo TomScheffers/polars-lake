@@ -40,6 +40,11 @@ class DbStub(object):
                 request_serializer=proto_dot_db__pb2.Sql.SerializeToString,
                 response_deserializer=proto_dot_db__pb2.ResultIpc.FromString,
                 )
+        self.SelectsIpc = channel.unary_unary(
+                '/db.Db/SelectsIpc',
+                request_serializer=proto_dot_db__pb2.Sqls.SerializeToString,
+                response_deserializer=proto_dot_db__pb2.ResultsIpc.FromString,
+                )
 
 
 class DbServicer(object):
@@ -71,6 +76,17 @@ class DbServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def SelectIpc(self, request, context):
+        """SwapPartition
+        DeletePartition
+        DropTable
+        AntiTable
+
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SelectsIpc(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -103,6 +119,11 @@ def add_DbServicer_to_server(servicer, server):
                     servicer.SelectIpc,
                     request_deserializer=proto_dot_db__pb2.Sql.FromString,
                     response_serializer=proto_dot_db__pb2.ResultIpc.SerializeToString,
+            ),
+            'SelectsIpc': grpc.unary_unary_rpc_method_handler(
+                    servicer.SelectsIpc,
+                    request_deserializer=proto_dot_db__pb2.Sqls.FromString,
+                    response_serializer=proto_dot_db__pb2.ResultsIpc.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -197,5 +218,22 @@ class Db(object):
         return grpc.experimental.unary_unary(request, target, '/db.Db/SelectIpc',
             proto_dot_db__pb2.Sql.SerializeToString,
             proto_dot_db__pb2.ResultIpc.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def SelectsIpc(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/db.Db/SelectsIpc',
+            proto_dot_db__pb2.Sqls.SerializeToString,
+            proto_dot_db__pb2.ResultsIpc.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

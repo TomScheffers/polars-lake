@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eproto/db.proto\x12\x02\x64\x62\"\x1a\n\x07Message\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x18\n\x08\x44\x61tabase\x12\x0c\n\x04name\x18\x01 \x01(\t\"&\n\x05Table\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\"\x82\x01\n\tSourceIpc\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x17\n\npartitions\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x62uckets\x18\x05 \x01(\tH\x01\x88\x01\x01\x42\r\n\x0b_partitionsB\n\n\x08_buckets\"\x12\n\x03Sql\x12\x0b\n\x03sql\x18\x01 \x01(\t\"\x19\n\tResultIpc\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x32\xe0\x01\n\x02\x44\x62\x12+\n\x0b\x43reateTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bInsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bUpsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12,\n\x10MaterializeTable\x12\t.db.Table\x1a\x0b.db.Message\"\x00\x12%\n\tSelectIpc\x12\x07.db.Sql\x1a\r.db.ResultIpc\"\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eproto/db.proto\x12\x02\x64\x62\"\x1a\n\x07Message\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x18\n\x08\x44\x61tabase\x12\x0c\n\x04name\x18\x01 \x01(\t\"&\n\x05Table\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\"\x82\x01\n\tSourceIpc\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x17\n\npartitions\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x07\x62uckets\x18\x05 \x01(\tH\x01\x88\x01\x01\x42\r\n\x0b_partitionsB\n\n\x08_buckets\"\x12\n\x03Sql\x12\x0b\n\x03sql\x18\x01 \x01(\t\"\x1d\n\x04Sqls\x12\x15\n\x04sqls\x18\x01 \x03(\x0b\x32\x07.db.Sql\"\'\n\tResultIpc\x12\x11\n\x04\x64\x61ta\x18\x01 \x01(\x0cH\x00\x88\x01\x01\x42\x07\n\x05_data\",\n\nResultsIpc\x12\x1e\n\x07results\x18\x01 \x03(\x0b\x32\r.db.ResultIpc2\x8a\x02\n\x02\x44\x62\x12+\n\x0b\x43reateTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bInsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bUpsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12,\n\x10MaterializeTable\x12\t.db.Table\x1a\x0b.db.Message\"\x00\x12%\n\tSelectIpc\x12\x07.db.Sql\x1a\r.db.ResultIpc\"\x00\x12(\n\nSelectsIpc\x12\x08.db.Sqls\x1a\x0e.db.ResultsIpc\"\x00\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -31,8 +31,12 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_SOURCEIPC']._serialized_end=247
   _globals['_SQL']._serialized_start=249
   _globals['_SQL']._serialized_end=267
-  _globals['_RESULTIPC']._serialized_start=269
-  _globals['_RESULTIPC']._serialized_end=294
-  _globals['_DB']._serialized_start=297
-  _globals['_DB']._serialized_end=521
+  _globals['_SQLS']._serialized_start=269
+  _globals['_SQLS']._serialized_end=298
+  _globals['_RESULTIPC']._serialized_start=300
+  _globals['_RESULTIPC']._serialized_end=339
+  _globals['_RESULTSIPC']._serialized_start=341
+  _globals['_RESULTSIPC']._serialized_end=385
+  _globals['_DB']._serialized_start=388
+  _globals['_DB']._serialized_end=654
 # @@protoc_insertion_point(module_scope)

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tonic::{transport::Server, Request, Response, Status};
 use anyhow::Result;
 use polars::enable_string_cache;
@@ -17,7 +19,7 @@ pub mod db {
 }
 
 use db::db_server::{Db, DbServer};
-use db::{Sql, SourceIpc, ResultIpc, Message, Table};
+use db::{Sql, Sqls, SourceIpc, ResultIpc, ResultsIpc, Message, Table};
 
 pub struct MyDbServer {
     database: Database
@@ -119,12 +121,31 @@ impl Db for MyDbServer {
             Ok(mut df) => {
                 let mut buf = Vec::new();
                 IpcWriter::new(&mut buf).with_compression(Some(IpcCompression::ZSTD)).finish(&mut df).expect("Writing to buf failed");
-                println!("Buffer length {}", buf.len());
-                Ok(Response::new(ResultIpc{data: buf}))
+                Ok(Response::new(ResultIpc{data: Some(buf)}))
             },
             Err(e) => Err(Status::internal(e.to_string()))
         }
     }
+
+    async fn selects_ipc(
+        &self,
+        request: Request<Sqls>,
+    ) -> Result<Response<ResultsIpc>, Status> {
+        let sqls = request.into_inner().sqls.iter().map(|x| x.sql.clone()).collect();
+        let buffers = self.database.execute_sqls(&sqls).into_iter().map(|(k, mut df)| {
+            let mut buf = Vec::new();
+            IpcWriter::new(&mut buf).with_compression(Some(IpcCompression::ZSTD)).finish(&mut df).expect("Writing to buf failed");
+            (k, buf)
+        }).collect::<HashMap<String, Vec<u8>>>();        
+        let results = sqls.into_iter().map(|x| {
+            match buffers.get(&x) {
+                Some(b) => ResultIpc{data: Some(b.clone())},
+                None => ResultIpc{data: None}
+            }
+        }).collect();
+        Ok(Response::new(ResultsIpc{results: results}))
+    }
+
 }
 
 #[tokio::main]

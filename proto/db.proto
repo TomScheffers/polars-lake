@@ -29,6 +29,8 @@ service Db {
   // AntiTable
 
   rpc SelectIpc(Sql) returns (ResultIpc) {}
+  rpc SelectsIpc(Sqls) returns (ResultsIpc) {}
+
 }
 
 message Message {
@@ -56,7 +58,15 @@ message Sql {
   string sql = 1;
 }
 
+message Sqls {
+  repeated Sql sqls = 1;
+}
+
 message ResultIpc {
-  bytes data = 1;
+  optional bytes data = 1;
   // repeated string columns = 3;
+}
+
+message ResultsIpc {
+  repeated ResultIpc results = 1;
 }
