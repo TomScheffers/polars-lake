@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-
 use tonic::{transport::Server, Request, Response, Status};
 use anyhow::Result;
 use polars::enable_string_cache;
+use polars::prelude::*;
 use polars_io::ipc::{IpcCompression, IpcWriter, IpcReader};
 use polars_io::{SerReader, SerWriter};
 
@@ -28,6 +28,20 @@ pub struct MyDbServer {
 impl MyDbServer {
     pub fn new(database: Database) -> Self {
         Self { database }
+    }
+}
+
+impl MyDbServer {
+    async fn _read_source(&self, r: SourceIpc) -> Result<DataFrame> {
+        Ok(IpcReader::new(std::io::Cursor::new(r.data)).finish()?)
+    }
+
+    async fn insert_source(&self, r: SourceIpc) -> Result<()> {
+        let df = IpcReader::new(std::io::Cursor::new(r.data)).finish()?;
+        let t = self.database.tables.read().unwrap();
+        let ds = t.get(&TableName{schema: r.schema, name: r.table}).unwrap();
+        ds.insert(df, false)?;
+        Ok(())
     }
 }
 
@@ -66,17 +80,24 @@ impl Db for MyDbServer {
         request: Request<SourceIpc>,
     ) -> Result<Response<Message>, Status> {
         let r = request.into_inner();
-        println!("Got request for {}, {}, {}", r.schema, r.table, r.data.len());
-        match IpcReader::new(std::io::Cursor::new(r.data)).finish() {
-            Ok(df) => {
-                let t = self.database.tables.read().unwrap();
-                let ds = t.get(&TableName{schema: r.schema, name: r.table}).unwrap();
-                match ds.insert(df, false) {
-                    Ok(_) => Ok(Response::new(Message{ message: "Upsert succeeded".to_string()})),
-                    Err(e) => Err(Status::internal(e.to_string()))
-                }            },
+
+        match self.insert_source(r).await {
+            Ok(_) => Ok(Response::new(Message{ message: "Upsert succeeded".to_string()})),
             Err(e) => Err(Status::internal(e.to_string()))
         }
+    }
+
+    async fn insert_table_stream(
+        &self,
+        request: Request<tonic::Streaming<SourceIpc>>,
+    ) -> Result<Response<Message>, Status> {
+        let mut stream = request.into_inner();
+        let mut futures = Vec::new();
+        while let Ok(Some(r)) = stream.message().await {
+            futures.push(self.insert_source(r));
+        };
+        futures::future::join_all(futures).await;
+        Ok(Response::new(Message{ message: "Async insert succeeded".to_string()}))
     }
 
     async fn upsert_table(

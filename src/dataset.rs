@@ -10,12 +10,7 @@ use serde_json;
 use serde::{Serialize, Deserialize};
 
 use crate::storage::{DatasetStorage, extract_files};
-use crate::buckets::series_to_bucket;
-
-pub enum Frame {
-    DataFrame(DataFrame),
-    LazyFrame(LazyFrame)
-}
+use crate::buckets::{expr_to_bucket, series_to_bucket};
 
 pub struct DatasetPart {
     table: RwLock<LazyFrame>,
@@ -42,6 +37,34 @@ impl DatasetPart {
         let df_new = self.table.read().unwrap().clone().collect()?.lazy();
         *self.table.write().unwrap() = df_new;
         Ok(self)
+    }
+
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        Ok(self.table.read().unwrap().schema()?)
+    }
+
+    pub fn column_dtype(&self, column: &String) -> Result<DataType> {
+        let schema = self.table.read().unwrap().schema()?;
+        Ok(schema.get(column).unwrap().clone())
+    }
+
+    pub fn to_lazyframe(&self, filter: bool) -> LazyFrame {
+        let mut lf = self.table.read().unwrap().clone();
+        if filter {
+            // if self.partitions.is_some() {
+            //     for (k, v) in self.partitions.as_ref().unwrap().iter() {
+            //         let _x = lit(v.clone());
+            //         lf = lf.filter(col(k).eq(lit(v.into::<u32>()).cast(self.column_dtype(k).unwrap())));
+            //     }
+            // }
+            if self.bucket_by.is_some() {
+                let arr = expr_to_bucket(col(&self.bucket_by.as_ref().unwrap()[0]), self.column_dtype(&self.bucket_by.as_ref().unwrap()[0]).unwrap(), 5).unwrap();
+                lf = lf.filter(arr.eq(lit(self.bucket_nr.unwrap() as u64)))
+            }
+            lf
+        } else {
+            lf
+        }
     }
 
     pub fn insert(&self, other: DatasetPart, collect: bool) -> Result<&Self> {
@@ -189,7 +212,7 @@ impl Dataset {
     }
 
     pub fn to_lazyframe(&self) -> Result<LazyFrame> {
-        let frames = self.parts.read().unwrap().iter().map(|(_,f)| f.table.read().unwrap().clone()).collect::<Vec<LazyFrame>>();
+        let frames = self.parts.read().unwrap().iter().map(|(_,f)| f.to_lazyframe(true)).collect::<Vec<LazyFrame>>();
         Ok(concat(frames, UnionArgs::default())?)
     }
 

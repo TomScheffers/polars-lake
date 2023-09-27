@@ -23,6 +23,8 @@ service Db {
   rpc UpsertTable(SourceIpc) returns (Message) {}
   rpc MaterializeTable(Table) returns (Message) {}
 
+  rpc InsertTableStream(stream SourceIpc) returns (Message) {}
+
   // SwapPartition
   // DeletePartition
   // DropTable

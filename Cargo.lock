@@ -1371,6 +1371,7 @@ name = "polars-lake"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "polars",
  "polars-io",
  "polars-sql",

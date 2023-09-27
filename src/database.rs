@@ -49,7 +49,9 @@ impl Database {
 
     pub fn execute_sql(&self, sql: String) -> Result<DataFrame> {
         let mut ctx = self.get_ctx();
-        let df = ctx.execute(&sql)?.collect()?;
+        let lf = ctx.execute(&sql)?;
+        println!("{:?}", lf.explain(true));
+        let df = lf.collect()?;
         Ok(df)
     }
 

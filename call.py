@@ -15,21 +15,45 @@ options = [('grpc.max_send_message_length', 1e10), ('grpc.max_receive_message_le
 t = pl.read_parquet("data/stock_current/org_key=1/file.parquet").with_columns(pl.lit(1).alias('org_key'))
 print(t)
 
-stores = t.groupby(['store_key']).agg(pl.count()).to_dict(as_series=False)["store_key"]
+stores = t.group_by(['store_key']).agg(pl.count()).to_dict(as_series=False)["store_key"]
+
+def table_to_ipc(frame):
+    b = io.BytesIO()
+    frame.write_ipc(b)
+    b.seek(0)
+    return b.read()
+
+def table_to_generator(frame, size):
+    for t in frame.iter_slices(80_000):
+        yield t
 
 # Create table
 with grpc.insecure_channel("localhost:50051", options=options) as channel:
     stub = pb2_grpc.DbStub(channel)
 
-    for idx, frame in enumerate(t.iter_slices(80_000)):
-        b = io.BytesIO()
-        frame.write_ipc(b)
-        b.seek(0)
+    t1 = time.time()
+    for idx, frame in enumerate(t.iter_slices(10_000)):
         if idx == 0:
-            m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=b.read(), partitions="org_key", buckets="sku_key"))
+            m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions="org_key", buckets="sku_key"))
         else:
-            m = stub.InsertTable(pb2.SourceIpc(schema="public", table="stock_current", data=b.read(), partitions="org_key", buckets="sku_key"))
+            m = stub.InsertTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions="org_key", buckets="sku_key"))
+    print("Create", time.time() - t1)
+
+    t1 = time.time()
+    m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(t.head(10)), partitions="org_key", buckets="sku_key"))
+    def table_to_generator(frame, size=10_000):
+        for t in frame.iter_slices(size):
+            yield pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(t), partitions="org_key", buckets="sku_key")
+    m = stub.InsertTableStream(table_to_generator(t))
+    print("Create (Stream)", time.time() - t1)
+
+    t1 = time.time()
     m = stub.MaterializeTable(pb2.Table(schema="public", table="stock_current"))
+    print("Materialize", time.time() - t1)
+
+    # t1 = time.time()
+    # ipcs = stub.SelectIpc(pb2.Sql(sql="SELECT * FROM stock_current WHERE sku_key = 1341286;"))
+    # print("Sku key query", time.time() - t1)
 
     t1 = time.time()
     ipcs = stub.SelectsIpc(pb2.Sqls(sqls=[pb2.Sql(sql="SELECT * FROM stock_current WHERE sku_key = 1341286;"), pb2.Sql(sql="SELECT * FROM stock_current WHERE sku_key = 1341286;")]))
@@ -51,9 +75,9 @@ def call(store_key):
     df = pl.read_ipc(ipc.data)
     return time.time() - t1
 
-with concurrent.futures.ThreadPoolExecutor(10) as executor:
-    futures = []
-    for s in stores[:20]:
-        futures.append(executor.submit(call, (s,)))
-    for future in concurrent.futures.as_completed(futures):
-        print(future.result())
+# with concurrent.futures.ThreadPoolExecutor(10) as executor:
+#     futures = []
+#     for s in stores[:20]:
+#         futures.append(executor.submit(call, (s,)))
+#     for future in concurrent.futures.as_completed(futures):
+#         print(future.result())

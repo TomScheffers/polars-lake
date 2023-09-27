@@ -28,3 +28,27 @@ pub fn series_to_bucket(arr: &Series, buckets: u32) -> Result<Series> {
         _ => Err(anyhow!("Invalid data type for bucketing: {}", arr.dtype()))
     }
 }
+
+pub fn expr_to_bucket(arr: Expr, dtype: DataType, buckets: u32) -> Result<Expr> {
+    match dtype {
+        DataType::Boolean => Ok(arr % lit(buckets)),
+        DataType::UInt8  => Ok(arr % lit(buckets)),
+        DataType::UInt16 => Ok(arr % lit(buckets)),
+        DataType::UInt32 => Ok(arr % lit(buckets)),
+        DataType::UInt64 => Ok(arr % lit(buckets)),
+        DataType::Int8   => Ok(arr % lit(buckets)),
+        DataType::Int16  => Ok(arr % lit(buckets)),
+        DataType::Int32  => Ok(arr % lit(buckets)),
+        DataType::Int64  => Ok(arr % lit(buckets)),
+        DataType::Float32 => Ok(arr % lit(buckets)),
+        DataType::Float64 => Ok(arr % lit(buckets)),
+        // DataType::Utf8    => {
+        //     let rs = RandomState::new();
+        //     let mut buf = Vec::new();
+        //     arr.utf8().unwrap().vec_hash(rs, &mut buf)?;
+        //     Ok(Series::new(arr.name(), &buf))
+        // },
+        DataType::Date => Ok(arr % lit(buckets)),
+        _ => Err(anyhow!("Invalid data type for bucketing: {}", dtype))
+    }
+}
