@@ -32,7 +32,7 @@ impl MyDbServer {
 }
 
 impl MyDbServer {
-    async fn _read_source(&self, r: SourceIpc) -> Result<DataFrame> {
+    async fn read_source(&self, r: SourceIpc) -> Result<DataFrame> {
         Ok(IpcReader::new(std::io::Cursor::new(r.data)).finish()?)
     }
 
@@ -52,17 +52,10 @@ impl Db for MyDbServer {
         request: Request<SourceIpc>,
     ) -> Result<Response<Message>, Status> {
         let r = request.into_inner();
-        println!("Got request for {}, {}, {}", r.schema, r.table, r.data.len());
         match IpcReader::new(std::io::Cursor::new(r.data)).finish() {
             Ok(df) => {
-                let parts: Option<Vec<String>> = match r.partitions {
-                    Some(p) => Some(p.split("/").map(String::from).collect()),
-                    None => None,
-                };
-                let buckets = match r.buckets {
-                    Some(p) => Some(p.split("/").map(String::from).collect()),
-                    None => None,    
-                };
+                let parts = if r.partitions.len() > 0 {Some(r.partitions.clone())} else {None};
+                let buckets = if r.buckets.len() > 0 {Some(r.buckets.clone())} else {None};
                 match Dataset::from_dataframe(df, parts, buckets, None) {
                     Ok(ds) => {
                         self.database.register(r.schema, r.table, ds);
@@ -87,25 +80,11 @@ impl Db for MyDbServer {
         }
     }
 
-    async fn insert_table_stream(
-        &self,
-        request: Request<tonic::Streaming<SourceIpc>>,
-    ) -> Result<Response<Message>, Status> {
-        let mut stream = request.into_inner();
-        let mut futures = Vec::new();
-        while let Ok(Some(r)) = stream.message().await {
-            futures.push(self.insert_source(r));
-        };
-        futures::future::join_all(futures).await;
-        Ok(Response::new(Message{ message: "Async insert succeeded".to_string()}))
-    }
-
     async fn upsert_table(
         &self,
         request: Request<SourceIpc>,
     ) -> Result<Response<Message>, Status> {
         let r = request.into_inner();
-        println!("Got request for {}, {}, {}", r.schema, r.table, r.data.len());
         match IpcReader::new(std::io::Cursor::new(r.data)).finish() {
             Ok(df) => {
                 let t = self.database.tables.read().unwrap();
@@ -120,12 +99,73 @@ impl Db for MyDbServer {
         }
     }
 
+    async fn create_table_stream(
+        &self,
+        request: Request<tonic::Streaming<SourceIpc>>,
+    ) -> Result<Response<Message>, Status> {
+        let mut stream = request.into_inner();
+        let mut futures = Vec::new();
+
+        // First message
+        let r = stream.message().await.unwrap().unwrap();
+        let schema = r.schema.clone();
+        let table = r.table.clone();
+        let partitions = if r.partitions.len() > 0 {Some(r.partitions.clone())} else {None};
+        let buckets = if r.buckets.len() > 0 {Some(r.buckets.clone())} else {None};
+        futures.push(self.read_source(r));
+
+        while let Ok(Some(r)) = stream.message().await {
+            futures.push(self.read_source(r));
+        };
+        let dfs = futures::future::join_all(futures).await;
+
+        // Find schema, table & concat frames
+        let df = concat(dfs.into_iter().map(|df| df.unwrap().lazy()).collect::<Vec<LazyFrame>>(), UnionArgs::default()).unwrap().collect().unwrap();
+
+        match Dataset::from_dataframe(df, partitions, buckets, None) {
+            Ok(ds) => {
+                self.database.register(schema, table, ds);
+                Ok(Response::new(Message{ message: "Created table".to_string()}))
+            },
+            Err(e) => Err(Status::internal(e.to_string()))
+        }
+    }
+
+    // async fn insert_table_stream(
+    //     &self,
+    //     request: Request<tonic::Streaming<SourceIpc>>,
+    // ) -> Result<Response<Message>, Status> {
+    //     let mut stream = request.into_inner();
+    //     let mut futures = Vec::new();
+
+        // First message
+        // let r = stream.message().await.unwrap().unwrap();
+        // let schema = r.schema;
+        // let table = r.table;
+
+    //     while let Ok(Some(r)) = stream.message().await {
+    //         futures.push(self.read_source(r));
+    //     };
+    //     let dfs = futures::future::join_all(futures).await;
+
+    //     // Find schema, table & concat frames
+    //     let df = concat(dfs.into_iter().map(|df| df.unwrap().lazy()).collect::<Vec<LazyFrame>>(), UnionArgs::default()).unwrap().collect().unwrap();
+
+    //     // Insert into dataset
+    //     let t = self.database.tables.read().unwrap();
+    //     let ds = t.get(&TableName{schema: schema, name: table}).unwrap();
+    //     ds.insert(df, false).unwrap();
+
+    //     Ok(Response::new(Message{ message: "Async insert succeeded".to_string()}))
+    // }
+
+
+
     async fn materialize_table(
         &self,
         request: Request<Table>,
     ) -> Result<Response<Message>, Status> {
         let r = request.into_inner();
-        println!("Got request for {}, {}", r.schema, r.table);
         let t = self.database.tables.read().unwrap();
         let ds = t.get(&TableName{schema: r.schema, name: r.table}).unwrap();
         match ds.collect() {

@@ -50,7 +50,7 @@ impl Database {
     pub fn execute_sql(&self, sql: String) -> Result<DataFrame> {
         let mut ctx = self.get_ctx();
         let lf = ctx.execute(&sql)?;
-        println!("{:?}", lf.explain(true));
+        //println!("{:?}", lf.explain(true));
         let df = lf.collect()?;
         Ok(df)
     }

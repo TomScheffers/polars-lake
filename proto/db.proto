@@ -23,7 +23,8 @@ service Db {
   rpc UpsertTable(SourceIpc) returns (Message) {}
   rpc MaterializeTable(Table) returns (Message) {}
 
-  rpc InsertTableStream(stream SourceIpc) returns (Message) {}
+  rpc CreateTableStream(stream SourceIpc) returns (Message) {}
+  // rpc InsertTableStream(stream SourceIpc) returns (Message) {}
 
   // SwapPartition
   // DeletePartition
@@ -52,8 +53,8 @@ message SourceIpc {
   string schema = 1;
   string table = 2;
   bytes data = 3;
-  optional string partitions = 4;
-  optional string buckets = 5;
+  repeated string partitions = 4;
+  repeated string buckets = 5;
 }
 
 message Sql {

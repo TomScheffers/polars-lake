@@ -23,28 +23,23 @@ def table_to_ipc(frame):
     b.seek(0)
     return b.read()
 
-def table_to_generator(frame, size):
-    for t in frame.iter_slices(80_000):
-        yield t
-
 # Create table
 with grpc.insecure_channel("localhost:50051", options=options) as channel:
     stub = pb2_grpc.DbStub(channel)
 
     t1 = time.time()
-    for idx, frame in enumerate(t.iter_slices(10_000)):
+    for idx, frame in enumerate(t.iter_slices(80_000)):
         if idx == 0:
-            m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions="org_key", buckets="sku_key"))
+            m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions=["org_key"], buckets=[]))
         else:
-            m = stub.InsertTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions="org_key", buckets="sku_key"))
+            m = stub.InsertTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(frame), partitions=["org_key"], buckets=[]))
     print("Create", time.time() - t1)
 
     t1 = time.time()
-    m = stub.CreateTable(pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(t.head(10)), partitions="org_key", buckets="sku_key"))
-    def table_to_generator(frame, size=10_000):
+    def table_to_generator(frame, size=80_000):
         for t in frame.iter_slices(size):
-            yield pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(t), partitions="org_key", buckets="sku_key")
-    m = stub.InsertTableStream(table_to_generator(t))
+            yield pb2.SourceIpc(schema="public", table="stock_current", data=table_to_ipc(t), partitions=["org_key"], buckets=[])
+    m = stub.CreateTableStream(table_to_generator(t))
     print("Create (Stream)", time.time() - t1)
 
     t1 = time.time()
@@ -52,7 +47,7 @@ with grpc.insecure_channel("localhost:50051", options=options) as channel:
     print("Materialize", time.time() - t1)
 
     # t1 = time.time()
-    # ipcs = stub.SelectIpc(pb2.Sql(sql="SELECT * FROM stock_current WHERE sku_key = 1341286;"))
+    # ipcs = stub.SelectIpc(pb2.Sql(sql="SELECT * FROM stock_current WHERE store_key = 101;"))
     # print("Sku key query", time.time() - t1)
 
     t1 = time.time()
@@ -75,9 +70,10 @@ def call(store_key):
     df = pl.read_ipc(ipc.data)
     return time.time() - t1
 
-# with concurrent.futures.ThreadPoolExecutor(10) as executor:
-#     futures = []
-#     for s in stores[:20]:
-#         futures.append(executor.submit(call, (s,)))
-#     for future in concurrent.futures.as_completed(futures):
-#         print(future.result())
+with concurrent.futures.ThreadPoolExecutor(20) as executor:
+    futures = []
+    t1 = time.time()
+    for s in stores:
+        futures.append(executor.submit(call, (s,)))
+    concurrent.futures.wait(futures)
+    print("All stores queries took (pool)", time.time() - t1)
