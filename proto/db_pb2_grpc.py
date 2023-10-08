@@ -40,6 +40,11 @@ class DbStub(object):
                 request_serializer=proto_dot_db__pb2.SourceIpc.SerializeToString,
                 response_deserializer=proto_dot_db__pb2.Message.FromString,
                 )
+        self.InsertTableStream = channel.stream_unary(
+                '/db.Db/InsertTableStream',
+                request_serializer=proto_dot_db__pb2.SourceIpc.SerializeToString,
+                response_deserializer=proto_dot_db__pb2.Message.FromString,
+                )
         self.SelectIpc = channel.unary_unary(
                 '/db.Db/SelectIpc',
                 request_serializer=proto_dot_db__pb2.Sql.SerializeToString,
@@ -81,6 +86,12 @@ class DbServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def CreateTableStream(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def InsertTableStream(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -128,6 +139,11 @@ def add_DbServicer_to_server(servicer, server):
             ),
             'CreateTableStream': grpc.stream_unary_rpc_method_handler(
                     servicer.CreateTableStream,
+                    request_deserializer=proto_dot_db__pb2.SourceIpc.FromString,
+                    response_serializer=proto_dot_db__pb2.Message.SerializeToString,
+            ),
+            'InsertTableStream': grpc.stream_unary_rpc_method_handler(
+                    servicer.InsertTableStream,
                     request_deserializer=proto_dot_db__pb2.SourceIpc.FromString,
                     response_serializer=proto_dot_db__pb2.Message.SerializeToString,
             ),
@@ -232,6 +248,23 @@ class Db(object):
             timeout=None,
             metadata=None):
         return grpc.experimental.stream_unary(request_iterator, target, '/db.Db/CreateTableStream',
+            proto_dot_db__pb2.SourceIpc.SerializeToString,
+            proto_dot_db__pb2.Message.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def InsertTableStream(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(request_iterator, target, '/db.Db/InsertTableStream',
             proto_dot_db__pb2.SourceIpc.SerializeToString,
             proto_dot_db__pb2.Message.FromString,
             options, channel_credentials,

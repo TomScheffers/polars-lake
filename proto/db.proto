@@ -24,7 +24,7 @@ service Db {
   rpc MaterializeTable(Table) returns (Message) {}
 
   rpc CreateTableStream(stream SourceIpc) returns (Message) {}
-  // rpc InsertTableStream(stream SourceIpc) returns (Message) {}
+  rpc InsertTableStream(stream SourceIpc) returns (Message) {}
 
   // SwapPartition
   // DeletePartition

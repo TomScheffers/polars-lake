@@ -1,7 +1,7 @@
 
 use polars::prelude::*;
 use std::collections::{HashSet, HashMap};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use polars_sql::SQLContext;
 
@@ -25,23 +25,23 @@ impl TableName {
 }
 
 pub struct Database {
-    pub tables: RwLock<HashMap<TableName, Dataset>>, // Underlying parts (referencing to tables)
+    pub tables: Arc<Mutex<HashMap<TableName, Dataset>>>, // Underlying parts (referencing to tables)
 }
 
 impl Database {
     pub fn new() -> Self {
-        let tables = RwLock::new(HashMap::new());
+        let tables = Arc::new(Mutex::new(HashMap::new()));
         Self {tables}
     }
 
     pub fn register(&self, schema: String, name: String, dataset: Dataset) {
         let tn = TableName::new(schema, name);
-        (*self.tables.write().unwrap()).insert(tn, dataset);
+        (*self.tables.lock().unwrap()).insert(tn, dataset);
     }
 
     pub fn get_ctx(&self) -> SQLContext {
         let mut ctx = SQLContext::new();
-        for (tn, ds) in self.tables.read().unwrap().iter() {
+        for (tn, ds) in self.tables.lock().unwrap().iter() {
             ctx.register(&tn.handler(), ds.to_lazyframe().unwrap());
         };   
         ctx     

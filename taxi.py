@@ -15,28 +15,29 @@ def table_to_ipc(frame):
     b.seek(0)
     return b.read()
 
+schema  = pl.scan_parquet("data/taxi/yellow_tripdata_2023-01.parquet").with_columns(pl.col("tpep_pickup_datetime").dt.date().alias("date")).schema
+
 # Create table
 with grpc.insecure_channel("localhost:50051") as channel:
     stub = pb2_grpc.DbStub(channel)
 
     t1 = time.time()
-    def root_to_generator(root, size=20_000):
+    def root_to_generator(root, schema, size=25_000, begin=0, end=-1):
         # Load data
-        schema = None
-        for p in os.listdir(root):
+        for p in os.listdir(root)[begin:end]:
             print(p)
             frame = pl.read_parquet(root + p).with_columns(pl.col("tpep_pickup_datetime").dt.date().alias("date"))
             if "Airport_fee" in frame.columns: frame = frame.drop("Airport_fee")
             if "airport_fee" in frame.columns: frame = frame.drop("airport_fee")
-            if schema is None: 
-                schema = frame.schema
-            else:
-                frame = frame.cast({k:v for k,v in schema.items() if k in frame.columns}, strict=False)
+            frame = frame.cast({k:v for k,v in schema.items() if k in frame.columns}, strict=False)
             for t in frame.iter_slices(size):
-                yield pb2.SourceIpc(schema="public", table="taxi", data=table_to_ipc(t), partitions=["date"], buckets=[])
+                yield pb2.SourceIpc(schema="public", table="taxi", data=table_to_ipc(t), partitions=[], buckets=[])
 
-    m = stub.CreateTableStream(root_to_generator("data/taxi/"))
+    m = stub.CreateTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=0, end=3))
     print("Create (Stream)", time.time() - t1)
+
+    m = stub.InsertTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=3, end=-1))
+    print("Insert (Stream)", time.time() - t1)
 
     t1 = time.time()
     m = stub.MaterializeTable(pb2.Table(schema="public", table="taxi"))

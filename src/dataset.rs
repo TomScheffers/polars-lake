@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::fs;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex};
 use anyhow::Result;
 
 use serde_json;
@@ -12,19 +12,20 @@ use serde::{Serialize, Deserialize};
 use crate::storage::{DatasetStorage, extract_files};
 use crate::buckets::{expr_to_bucket, series_to_bucket};
 
+#[derive(Clone)]
 pub struct DatasetPart {
-    table: RwLock<LazyFrame>,
+    table: Arc<Mutex<LazyFrame>>,
     partitions: Option<HashMap<String, String>>,
     bucket_by: Option<Vec<String>>,
     bucket_nr: Option<usize>,
     path: Option<String>,
-    changes: RwLock<usize>,
+    changes: Arc<Mutex<usize>>,
 }
 
 impl DatasetPart {
     pub fn new( table: LazyFrame, partitions: Option<HashMap<String, String>>, bucket_by: Option<Vec<String>>, bucket_nr: Option<usize>, path: Option<String>) -> Self {
-        let table = RwLock::new(table);
-        let changes = RwLock::new(0);
+        let table = Arc::new(Mutex::new(table));
+        let changes = Arc::new(Mutex::new(0));
         Self { table, partitions, bucket_by, bucket_nr, path, changes }
     }
 
@@ -34,22 +35,23 @@ impl DatasetPart {
     }
 
     pub fn collect(&self) -> Result<&Self> {
-        let df_new = self.table.read().unwrap().clone().collect()?.lazy();
-        *self.table.write().unwrap() = df_new;
+        let mut lock = self.table.lock().unwrap();
+        let df_new = lock.clone().collect()?.lazy();
+        *lock = df_new;
         Ok(self)
     }
 
     pub fn schema(&self) -> Result<Arc<Schema>> {
-        Ok(self.table.read().unwrap().schema()?)
+        Ok(self.table.lock().unwrap().schema()?)
     }
 
     pub fn column_dtype(&self, column: &String) -> Result<DataType> {
-        let schema = self.table.read().unwrap().schema()?;
+        let schema = self.schema()?;
         Ok(schema.get(column).unwrap().clone())
     }
 
     pub fn to_lazyframe(&self, filter: bool) -> LazyFrame {
-        let mut lf = self.table.read().unwrap().clone();
+        let mut lf = self.table.lock().unwrap().clone();
         if filter {
             // if self.partitions.is_some() {
             //     for (k, v) in self.partitions.as_ref().unwrap().iter() {
@@ -68,27 +70,31 @@ impl DatasetPart {
     }
 
     pub fn insert(&self, other: DatasetPart, collect: bool) -> Result<&Self> {
+        // Get write lock
+        let mut t_lock = self.table.lock().unwrap();
+        let mut c_lock = self.changes.lock().unwrap();
+
         // Materialize both
-        let left = self.table.read().unwrap().clone(); //.cache();
-        let right = other.table.read().unwrap().clone(); //.cache();
+        let left = t_lock.clone();
+        let right = other.table.lock().unwrap().clone();
         let rows_changed = right.clone().collect()?.height();
         let df_new = concat([left, right], UnionArgs::default())?;
 
         // Replace in Mutex (collect if needed)
-        if collect | (self.changes.read().unwrap().clone() + rows_changed > 10000) {
+        if collect  { // | (c_lock.clone() + rows_changed > 10000)
             let df = df_new.collect()?.lazy();
-            *self.table.write().unwrap() = df;
-            *self.changes.write().unwrap() = 0;
+            *t_lock = df;
+            *c_lock = 0;
         } else {
-            *self.table.write().unwrap() = df_new; 
-            *self.changes.write().unwrap() += rows_changed;       
+            *t_lock = df_new; 
+            *c_lock += rows_changed;       
         };        
         Ok(self)
     }
 
     pub fn upsert(&self, other: DatasetPart, keys: Vec<String>, collect: bool) -> Result<&Self> {
         let keys_col = keys.iter().map(|c| col(c)).collect::<Vec<Expr>>();
-        let coalesce_exp = self.table.read().unwrap().schema().unwrap().iter_names()
+        let coalesce_exp = self.schema().unwrap().iter_names()
             .map(|n| {
                 if keys.contains(&n.as_str().to_string()) {
                     col(n)
@@ -98,29 +104,29 @@ impl DatasetPart {
             })
             .collect::<Vec<Expr>>();
 
+        // Get write lock
+        let mut t_lock = self.table.lock().unwrap();
+        let mut c_lock = self.changes.lock().unwrap();
+
         // Materialize both
-        let left = self.table.read().unwrap().clone(); //.cache();
-        let right = other.table.read().unwrap().clone(); //.cache();
+        let right = other.table.lock().unwrap().clone();
 
         // Outer join
-        let df_outer = left.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinArgs::new(JoinType::Outer));
+        let df_outer = t_lock.clone().join(right.clone(), keys_col.clone(), keys_col.clone(), JoinArgs::new(JoinType::Outer));
         let df_new = df_outer.select(coalesce_exp);
 
         // Find rows which have changed
         let rows_changed = right.collect()?.height();
 
         // Replace in Mutex (collect if needed)
-        if collect | (self.changes.read().unwrap().clone() + rows_changed > 10000) {
+        if collect  { // | (c_lock.clone() + rows_changed > 10000)
             let df = df_new.collect()?.lazy();
-            *self.table.write().unwrap() = df;
-            *self.changes.write().unwrap() = 0;
+            *t_lock = df;
+            *c_lock = 0;
         } else {
-            // let mut lock = self.table.write().unwrap();
-            *self.table.write().unwrap() = df_new; 
-            *self.changes.write().unwrap() += rows_changed;       
-        };
-        println!("Rows changed counter: {:?}", self.changes.read().unwrap().clone());
-        
+            *t_lock = df_new; 
+            *c_lock += rows_changed;       
+        };        
         Ok(self)
     }
 
@@ -150,7 +156,7 @@ impl DatasetPart {
         fs::create_dir_all(&partition_root)?;
         let path = format!("{}/{}", root, self.file_path());
         let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
-        let mut df = self.table.read().unwrap().clone().collect()?;
+        let mut df = self.table.lock().unwrap().clone().collect()?;
         println!("Saving df of size {:?} in path {:?}", df.shape(), path);
         ParquetWriter::new(&mut file).finish(&mut df)?;
         Ok(())
@@ -162,12 +168,12 @@ pub struct Dataset {
     pub partitions: Option<Vec<String>>, // File based partitioning columns
     pub buckets: Option<Vec<String>>, // Hash bucketing columns (within partitions)
     #[serde(skip_serializing, skip_deserializing)]
-    pub parts: RwLock<HashMap<String, DatasetPart>>, // Underlying parts (referencing to tables)
+    pub parts: Arc<Mutex<HashMap<String, DatasetPart>>>, // Underlying parts (referencing to tables)
     pub storage: Option<DatasetStorage> // Storage options
 }
 
 impl Dataset {
-    pub fn new(partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, parts: RwLock<HashMap<String, DatasetPart>>, storage: Option<DatasetStorage>) -> Self {
+    pub fn new(partitions: Option<Vec<String>>, buckets: Option<Vec<String>>, parts: Arc<Mutex<HashMap<String, DatasetPart>>>, storage: Option<DatasetStorage>) -> Self {
         Self { partitions, buckets, parts, storage }
     }
 
@@ -182,7 +188,11 @@ impl Dataset {
         }
         
         // Partition by
-        let dfp = df.partition_by(group_cols, true)?;
+        let dfp = if group_cols.len() > 0 {
+            df.partition_by(group_cols, true)?
+        } else {
+            vec![df]
+        };
         let parts = dfp
             .into_iter()
             .map(|x| {
@@ -208,16 +218,16 @@ impl Dataset {
                 }
             }).collect::<HashMap<String, DatasetPart>>();
 
-        Ok(Self::new(partitions.clone(), buckets, RwLock::new(parts), storage))
+        Ok(Self::new(partitions.clone(), buckets, Arc::new(Mutex::new(parts)), storage))
     }
 
     pub fn to_lazyframe(&self) -> Result<LazyFrame> {
-        let frames = self.parts.read().unwrap().iter().map(|(_,f)| f.to_lazyframe(true)).collect::<Vec<LazyFrame>>();
+        let frames = self.parts.lock().unwrap().iter().map(|(_,f)| f.to_lazyframe(true)).collect::<Vec<LazyFrame>>();
         Ok(concat(frames, UnionArgs::default())?)
     }
 
     pub fn collect(&self) -> Result<()> {
-        let _ = self.parts.read().unwrap()
+        let _ = self.parts.lock().unwrap()
             .par_iter()
             .map(|(_, p)| {
                 p.collect().unwrap();
@@ -232,19 +242,20 @@ impl Dataset {
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
         // Insert into parts and keep paths which are changes for saving
-        let _ = other.parts.into_inner().unwrap()
-            .into_iter()
+        let lock = other.parts.lock().unwrap();
+        let _ = lock
+            .iter()
             .map(|(other_path, other_part)| {
-                let parts = self.parts.read().unwrap();
-                match parts.get(&other_path) {
+                let mut parts = self.parts.lock().unwrap();
+                match parts.get(other_path) {
                     Some(sp) => {
-                        sp.insert(other_part, false).unwrap();
+                        sp.insert(other_part.clone(), false).unwrap();
                     }, 
                     None => {
-                        self.parts.write().unwrap().insert(other_path.clone(), other_part);
+                        parts.insert(other_path.clone(), other_part.clone());
                     }
                 }
-                other_path
+                other_path.clone()
             })
             .collect::<Vec<String>>();
         
@@ -258,19 +269,20 @@ impl Dataset {
         let other = Dataset::from_dataframe(df, self.partitions.clone(), self.buckets.clone(), self.storage.clone())?;
 
         // Upsert into parts and keep paths which are changes for saving
-        let _ = other.parts.into_inner().unwrap()
-            .into_iter()
+        let lock = other.parts.lock().unwrap();
+        let _ = lock
+            .iter()
             .map(|(other_path, other_part)| {
-                let parts = self.parts.read().unwrap();
-                match parts.get(&other_path) {
+                let mut parts = self.parts.lock().unwrap();
+                match parts.get(other_path) {
                     Some(sp) => {
-                        sp.upsert(other_part, keys.clone(), false).unwrap();
+                        sp.upsert(other_part.clone(), keys.clone(), false).unwrap();
                     }, 
                     None => {
-                        self.parts.write().unwrap().insert(other_path.clone(), other_part);
+                        parts.insert(other_path.clone(), other_part.clone());
                     }
                 }
-                other_path
+                other_path.clone()
             })
             .collect::<Vec<String>>();
         
@@ -296,7 +308,7 @@ impl Dataset {
                 fs::write(manifest_path, serde_json::to_string_pretty(&self).expect("Issue in serialization of manifest")).unwrap();
 
                 // Save underlying parts
-                let _ = self.parts.read().unwrap()
+                let _ = self.parts.lock().unwrap()
                     .par_iter()
                     .map(|(_, p)| {
                         p.save(&storage.root)?;
@@ -321,7 +333,7 @@ impl Dataset {
                 let mut empty = Vec::new();
                 let root_files = extract_files(&Path::new(&storage.root), &contains, &mut empty);
             
-                obj.parts = RwLock::new(root_files 
+                obj.parts = Arc::new(Mutex::new(root_files 
                     .par_iter()
                     .map(|path| {
                         let mut partitions = HashMap::new();
@@ -358,7 +370,7 @@ impl Dataset {
                         let path = part.file_path();
                         (path, part)
                     })
-                    .collect::<HashMap<String, DatasetPart>>());
+                    .collect::<HashMap<String, DatasetPart>>()));
             },
             None => println!("Cannot load parts because StorageOptions are not present")
         };
