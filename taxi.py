@@ -21,7 +21,6 @@ schema  = pl.scan_parquet("data/taxi/yellow_tripdata_2023-01.parquet").with_colu
 with grpc.insecure_channel("localhost:50051") as channel:
     stub = pb2_grpc.DbStub(channel)
 
-    t1 = time.time()
     def root_to_generator(root, schema, size=25_000, begin=0, end=-1):
         # Load data
         for p in os.listdir(root)[begin:end]:
@@ -33,15 +32,21 @@ with grpc.insecure_channel("localhost:50051") as channel:
             for t in frame.iter_slices(size):
                 yield pb2.SourceIpc(schema="public", table="taxi", data=table_to_ipc(t), partitions=[], buckets=[])
 
-    m = stub.CreateTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=0, end=3))
+    t1 = time.time()
+    m = stub.CreateTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=0, end=1))
     print("Create (Stream)", time.time() - t1)
 
-    m = stub.InsertTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=3, end=-1))
+    t1 = time.time()
+    m = stub.InsertTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=1, end=None))
     print("Insert (Stream)", time.time() - t1)
 
     t1 = time.time()
     m = stub.MaterializeTable(pb2.Table(schema="public", table="taxi"))
     print("Materialize", time.time() - t1)
+
+    t1 = time.time()
+    m = stub.GetTableInfo(pb2.Table(schema="public", table="taxi"))
+    print("Info", time.time() - t1, m.rows)
 
     t1 = time.time()
     ipcs = stub.SelectsIpc(pb2.Sqls(sqls=[pb2.Sql(sql="SELECT COUNT(*) as cnt, SUM(total_amount) as total_amount FROM taxi;")]))

@@ -22,14 +22,16 @@ service Db {
   rpc InsertTable(SourceIpc) returns (Message) {}
   rpc UpsertTable(SourceIpc) returns (Message) {}
   rpc MaterializeTable(Table) returns (Message) {}
+  rpc GetTableInfo(Table) returns (TableInfo) {}
+
 
   rpc CreateTableStream(stream SourceIpc) returns (Message) {}
   rpc InsertTableStream(stream SourceIpc) returns (Message) {}
+  // rpc UpsertTableStream(stream SourceIpc) returns (Message) {}
 
   // SwapPartition
   // DeletePartition
   // DropTable
-  // AntiTable
 
   rpc SelectIpc(Sql) returns (ResultIpc) {}
   rpc SelectsIpc(Sqls) returns (ResultsIpc) {}
@@ -47,6 +49,13 @@ message Database {
 message Table {
   string schema = 1;
   string table = 2;
+}
+
+message TableInfo {
+  repeated string columns = 1;
+  repeated string dtypes = 2;
+  uint32 rows = 3;
+  uint32 parts = 4;
 }
 
 message SourceIpc {

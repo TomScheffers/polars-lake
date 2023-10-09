@@ -35,6 +35,11 @@ class DbStub(object):
                 request_serializer=proto_dot_db__pb2.Table.SerializeToString,
                 response_deserializer=proto_dot_db__pb2.Message.FromString,
                 )
+        self.GetTableInfo = channel.unary_unary(
+                '/db.Db/GetTableInfo',
+                request_serializer=proto_dot_db__pb2.Table.SerializeToString,
+                response_deserializer=proto_dot_db__pb2.TableInfo.FromString,
+                )
         self.CreateTableStream = channel.stream_unary(
                 '/db.Db/CreateTableStream',
                 request_serializer=proto_dot_db__pb2.SourceIpc.SerializeToString,
@@ -85,6 +90,12 @@ class DbServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetTableInfo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CreateTableStream(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -101,7 +112,6 @@ class DbServicer(object):
         """SwapPartition
         DeletePartition
         DropTable
-        AntiTable
 
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -136,6 +146,11 @@ def add_DbServicer_to_server(servicer, server):
                     servicer.MaterializeTable,
                     request_deserializer=proto_dot_db__pb2.Table.FromString,
                     response_serializer=proto_dot_db__pb2.Message.SerializeToString,
+            ),
+            'GetTableInfo': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetTableInfo,
+                    request_deserializer=proto_dot_db__pb2.Table.FromString,
+                    response_serializer=proto_dot_db__pb2.TableInfo.SerializeToString,
             ),
             'CreateTableStream': grpc.stream_unary_rpc_method_handler(
                     servicer.CreateTableStream,
@@ -233,6 +248,23 @@ class Db(object):
         return grpc.experimental.unary_unary(request, target, '/db.Db/MaterializeTable',
             proto_dot_db__pb2.Table.SerializeToString,
             proto_dot_db__pb2.Message.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def GetTableInfo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/db.Db/GetTableInfo',
+            proto_dot_db__pb2.Table.SerializeToString,
+            proto_dot_db__pb2.TableInfo.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 

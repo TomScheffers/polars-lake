@@ -1,10 +1,11 @@
 use polars::prelude::*;
+use polars::prelude::LogicalPlan;
 use rayon::prelude::*;
 use std::path::Path;
 use std::fs;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use anyhow::Result;
+use anyhow::{Result, Error};
 
 use serde_json;
 use serde::{Serialize, Deserialize};
@@ -20,13 +21,22 @@ pub struct DatasetPart {
     bucket_nr: Option<usize>,
     path: Option<String>,
     changes: Arc<Mutex<usize>>,
+    rows: Arc<Mutex<usize>>,
+}
+
+pub fn rows_from_lazyframe(lf: &LazyFrame) -> usize {
+    match &lf.logical_plan {
+        LogicalPlan::DataFrameScan{df, ..} => { df.height() },
+        _ => { 0 }
+    }
 }
 
 impl DatasetPart {
     pub fn new( table: LazyFrame, partitions: Option<HashMap<String, String>>, bucket_by: Option<Vec<String>>, bucket_nr: Option<usize>, path: Option<String>) -> Self {
+        let rows = Arc::new(Mutex::new(rows_from_lazyframe(&table)));
         let table = Arc::new(Mutex::new(table));
         let changes = Arc::new(Mutex::new(0));
-        Self { table, partitions, bucket_by, bucket_nr, path, changes }
+        Self { table, partitions, bucket_by, bucket_nr, path, changes, rows }
     }
 
     pub fn with_root(mut self, root: &String) -> Self {
@@ -73,6 +83,7 @@ impl DatasetPart {
         // Get write lock
         let mut t_lock = self.table.lock().unwrap();
         let mut c_lock = self.changes.lock().unwrap();
+        let mut r_lock = self.rows.lock().unwrap();
 
         // Materialize both
         let left = t_lock.clone();
@@ -82,12 +93,14 @@ impl DatasetPart {
 
         // Replace in Mutex (collect if needed)
         if collect  { // | (c_lock.clone() + rows_changed > 10000)
-            let df = df_new.collect()?.lazy();
-            *t_lock = df;
+            let df = df_new.collect()?;
+            *r_lock = df.height();
+            *t_lock = df.lazy();
             *c_lock = 0;
         } else {
             *t_lock = df_new; 
-            *c_lock += rows_changed;       
+            *c_lock += rows_changed;   
+            *r_lock += rows_changed;    
         };        
         Ok(self)
     }
@@ -107,6 +120,7 @@ impl DatasetPart {
         // Get write lock
         let mut t_lock = self.table.lock().unwrap();
         let mut c_lock = self.changes.lock().unwrap();
+        let mut r_lock = self.rows.lock().unwrap();
 
         // Materialize both
         let right = other.table.lock().unwrap().clone();
@@ -120,12 +134,14 @@ impl DatasetPart {
 
         // Replace in Mutex (collect if needed)
         if collect  { // | (c_lock.clone() + rows_changed > 10000)
-            let df = df_new.collect()?.lazy();
-            *t_lock = df;
+            let df = df_new.collect()?;
+            *r_lock = df.height();
+            *t_lock = df.lazy();
             *c_lock = 0;
         } else {
             *t_lock = df_new; 
-            *c_lock += rows_changed;       
+            *c_lock += rows_changed;   
+            *r_lock += 0;    
         };        
         Ok(self)
     }
@@ -224,6 +240,21 @@ impl Dataset {
     pub fn to_lazyframe(&self) -> Result<LazyFrame> {
         let frames = self.parts.lock().unwrap().iter().map(|(_,f)| f.to_lazyframe(true)).collect::<Vec<LazyFrame>>();
         Ok(concat(frames, UnionArgs::default())?)
+    }
+
+    pub fn rows(&self) -> usize {
+        let rows = self.parts.lock().unwrap()
+            .par_iter()
+            .map(|(_, p)| {
+                p.rows.lock().unwrap().clone()
+            })
+            .sum();
+        rows
+    }
+
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        let parts = self.parts.lock().unwrap();
+        parts.values().next().ok_or(Error::msg("No parts"))?.schema()
     }
 
     pub fn collect(&self) -> Result<()> {

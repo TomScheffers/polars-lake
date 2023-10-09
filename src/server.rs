@@ -19,7 +19,7 @@ pub mod db {
 }
 
 use db::db_server::{Db, DbServer};
-use db::{Sql, Sqls, SourceIpc, ResultIpc, ResultsIpc, Message, Table};
+use db::{Sql, Sqls, SourceIpc, ResultIpc, ResultsIpc, Message, Table, TableInfo};
 
 pub struct MyDbServer {
     database: Arc<Database>
@@ -228,18 +228,45 @@ impl Db for MyDbServer {
         Ok(Response::new(Message{ message: "Async insert succeeded".to_string()}))
     }
 
-
-
     async fn materialize_table(
         &self,
         request: Request<Table>,
     ) -> Result<Response<Message>, Status> {
         let r = request.into_inner();
-        let t = self.database.tables.lock().unwrap();
-        let ds = t.get(&TableName{schema: r.schema, name: r.table}).unwrap();
-        match ds.collect() {
-            Ok(_) => Ok(Response::new(Message{ message: "Materialize succeeded".to_string()})),
-            Err(e) => Err(Status::internal(e.to_string()))
+        let tn = TableName{schema: r.schema, name: r.table};    
+        let tables = self.database.tables.lock().unwrap();    
+        match tables.get(&tn) {
+            Some(ds) => {
+                match ds.collect() {
+                    Ok(_) => Ok(Response::new(Message{ message: "Materialize succeeded".to_string()})),
+                    Err(e) => Err(Status::internal(e.to_string()))
+                }
+            },
+            None => Err(Status::internal("Table does not exist".to_string()))
+        }
+    }
+
+    async fn get_table_info(
+        &self,
+        request: Request<Table>,
+    ) -> Result<Response<TableInfo>, Status> {
+        let r = request.into_inner();
+        let tn = TableName{schema: r.schema, name: r.table};
+        let tables = self.database.tables.lock().unwrap();
+        match tables.get(&tn) {
+            Some(ds) => {
+                let rows = ds.rows() as u32;
+                let parts = ds.parts.lock().unwrap().keys().len() as u32;
+                match ds.schema() {
+                    Ok(schema) => {
+                        let columns = schema.iter_names().map(|n| n.as_str().to_string()).collect();
+                        let dtypes = schema.iter_dtypes().map(|dt| dt.to_string()).collect();
+                        Ok(Response::new(TableInfo{ columns, dtypes, rows, parts}))
+                    },
+                    Err(e) => Err(Status::internal(e.to_string()))
+                }
+            },
+            None => Err(Status::internal("Table does not exist".to_string()))
         }
     }
 
