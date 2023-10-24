@@ -9,35 +9,39 @@ import numpy as np
 
 # python -m grpc_tools.protoc --proto_path=. ./proto/db.proto --python_out=. --grpc_python_out=.
 
+root = "data/taxi/"
+schema, frames = None, []
+for p in os.listdir(root):
+    frame = pl.scan_parquet(root + p).with_columns(pl.col("tpep_pickup_datetime").dt.date().alias("date"))
+    if "Airport_fee" in frame.columns: frame = frame.drop("Airport_fee")
+    if "airport_fee" in frame.columns: frame = frame.drop("airport_fee")
+    if schema:
+        frame = frame.cast({k:v for k,v in schema.items() if k in frame.columns}, strict=False)
+    else:
+        schema = frame.schema
+    frames.append(frame)
+t = pl.concat(frames).collect()
+
 def table_to_ipc(frame):
     b = io.BytesIO()
     frame.write_ipc(b)
     b.seek(0)
     return b.read()
 
-schema  = pl.scan_parquet("data/taxi/yellow_tripdata_2023-01.parquet").with_columns(pl.col("tpep_pickup_datetime").dt.date().alias("date")).schema
+def table_generator(size=25_000, start_idx=0, end_idx=None):
+    for ts in t.slice(start_idx, end_idx).iter_slices(size):
+        yield pb2.SourceIpc(schema="public", table="taxi", data=table_to_ipc(ts), partitions=[], buckets=[], keys=[])
 
 # Create table
 with grpc.insecure_channel("localhost:50051") as channel:
     stub = pb2_grpc.DbStub(channel)
 
-    def root_to_generator(root, schema, size=25_000, begin=0, end=-1):
-        # Load data
-        for p in os.listdir(root)[begin:end]:
-            print(p)
-            frame = pl.read_parquet(root + p).with_columns(pl.col("tpep_pickup_datetime").dt.date().alias("date"))
-            if "Airport_fee" in frame.columns: frame = frame.drop("Airport_fee")
-            if "airport_fee" in frame.columns: frame = frame.drop("airport_fee")
-            frame = frame.cast({k:v for k,v in schema.items() if k in frame.columns}, strict=False)
-            for t in frame.iter_slices(size):
-                yield pb2.SourceIpc(schema="public", table="taxi", data=table_to_ipc(t), partitions=[], buckets=[])
-
     t1 = time.time()
-    m = stub.CreateTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=0, end=1))
+    m = stub.CreateTable(table_generator(size=25_000, start_idx=0, end_idx=50_000))
     print("Create (Stream)", time.time() - t1)
 
     t1 = time.time()
-    m = stub.InsertTableStream(root_to_generator("data/taxi/", schema=schema, size=25_000, begin=1, end=None))
+    m = stub.InsertTable(table_generator(size=25_000, start_idx=50_000, end_idx=None))
     print("Insert (Stream)", time.time() - t1)
 
     t1 = time.time()
@@ -49,7 +53,9 @@ with grpc.insecure_channel("localhost:50051") as channel:
     print("Info", time.time() - t1, m.rows)
 
     t1 = time.time()
-    ipcs = stub.SelectsIpc(pb2.Sqls(sqls=[pb2.Sql(sql="SELECT COUNT(*) as cnt, SUM(total_amount) as total_amount FROM taxi;")]))
-    for ipc in ipcs.results:
-        print(pl.read_ipc(ipc.data))
-    print("Single date took", time.time() - t1)
+    def query_gen(n):
+        for i in range(n): yield pb2.Sql(sql="SELECT COUNT(*) as cnt, SUM(total_amount) as total_amount FROM taxi;", qid=i)        
+    ipcs = stub.SelectIpc(query_gen(5))
+    for ipc in ipcs:
+        print(ipc.qid, pl.read_ipc(ipc.data))
+    print("Async queries", time.time() - t1)

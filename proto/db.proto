@@ -18,24 +18,20 @@ package db;
 
 // Interface exported by the server.
 service Db {
-  rpc CreateTable(SourceIpc) returns (Message) {}
-  rpc InsertTable(SourceIpc) returns (Message) {}
-  rpc UpsertTable(SourceIpc) returns (Message) {}
+  rpc CreateTable(stream SourceIpc) returns (Message) {}
+  rpc InsertTable(stream SourceIpc) returns (Message) {}
+  rpc UpsertTable(stream SourceIpc) returns (Message) {}
+
+  // Table based handling
   rpc MaterializeTable(Table) returns (Message) {}
   rpc GetTableInfo(Table) returns (TableInfo) {}
-
-
-  rpc CreateTableStream(stream SourceIpc) returns (Message) {}
-  rpc InsertTableStream(stream SourceIpc) returns (Message) {}
-  // rpc UpsertTableStream(stream SourceIpc) returns (Message) {}
+  // rpc DropTable(Table) returns (Message) {}
+  // rpc Offload(Table) returns (Message) {}
 
   // SwapPartition
   // DeletePartition
-  // DropTable
 
-  rpc SelectIpc(Sql) returns (ResultIpc) {}
-  rpc SelectsIpc(Sqls) returns (ResultsIpc) {}
-
+  rpc SelectIpc(stream Sql) returns (stream SqlResults) {}
 }
 
 message Message {
@@ -64,21 +60,18 @@ message SourceIpc {
   bytes data = 3;
   repeated string partitions = 4;
   repeated string buckets = 5;
+  repeated string keys = 6;
 }
 
 message Sql {
   string sql = 1;
+  optional uint32 qid = 2;
 }
 
-message Sqls {
-  repeated Sql sqls = 1;
-}
-
-message ResultIpc {
-  optional bytes data = 1;
-  // repeated string columns = 3;
-}
-
-message ResultsIpc {
-  repeated ResultIpc results = 1;
+message SqlResults {
+  bytes data = 1;
+  uint32 rows = 2;
+  repeated string columns = 3;
+  repeated string dtypes = 4;
+  optional uint32 qid = 5;
 }

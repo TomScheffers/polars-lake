@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eproto/db.proto\x12\x02\x64\x62\"\x1a\n\x07Message\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x18\n\x08\x44\x61tabase\x12\x0c\n\x04name\x18\x01 \x01(\t\"&\n\x05Table\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\"I\n\tTableInfo\x12\x0f\n\x07\x63olumns\x18\x01 \x03(\t\x12\x0e\n\x06\x64types\x18\x02 \x03(\t\x12\x0c\n\x04rows\x18\x03 \x01(\r\x12\r\n\x05parts\x18\x04 \x01(\r\"]\n\tSourceIpc\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x12\n\npartitions\x18\x04 \x03(\t\x12\x0f\n\x07\x62uckets\x18\x05 \x03(\t\"\x12\n\x03Sql\x12\x0b\n\x03sql\x18\x01 \x01(\t\"\x1d\n\x04Sqls\x12\x15\n\x04sqls\x18\x01 \x03(\x0b\x32\x07.db.Sql\"\'\n\tResultIpc\x12\x11\n\x04\x64\x61ta\x18\x01 \x01(\x0cH\x00\x88\x01\x01\x42\x07\n\x05_data\",\n\nResultsIpc\x12\x1e\n\x07results\x18\x01 \x03(\x0b\x32\r.db.ResultIpc2\xa0\x03\n\x02\x44\x62\x12+\n\x0b\x43reateTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bInsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12+\n\x0bUpsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00\x12,\n\x10MaterializeTable\x12\t.db.Table\x1a\x0b.db.Message\"\x00\x12*\n\x0cGetTableInfo\x12\t.db.Table\x1a\r.db.TableInfo\"\x00\x12\x33\n\x11\x43reateTableStream\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00(\x01\x12\x33\n\x11InsertTableStream\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00(\x01\x12%\n\tSelectIpc\x12\x07.db.Sql\x1a\r.db.ResultIpc\"\x00\x12(\n\nSelectsIpc\x12\x08.db.Sqls\x1a\x0e.db.ResultsIpc\"\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0eproto/db.proto\x12\x02\x64\x62\"\x1a\n\x07Message\x12\x0f\n\x07message\x18\x01 \x01(\t\"\x18\n\x08\x44\x61tabase\x12\x0c\n\x04name\x18\x01 \x01(\t\"&\n\x05Table\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\"I\n\tTableInfo\x12\x0f\n\x07\x63olumns\x18\x01 \x03(\t\x12\x0e\n\x06\x64types\x18\x02 \x03(\t\x12\x0c\n\x04rows\x18\x03 \x01(\r\x12\r\n\x05parts\x18\x04 \x01(\r\"k\n\tSourceIpc\x12\x0e\n\x06schema\x18\x01 \x01(\t\x12\r\n\x05table\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\x12\x12\n\npartitions\x18\x04 \x03(\t\x12\x0f\n\x07\x62uckets\x18\x05 \x03(\t\x12\x0c\n\x04keys\x18\x06 \x03(\t\",\n\x03Sql\x12\x0b\n\x03sql\x18\x01 \x01(\t\x12\x10\n\x03qid\x18\x02 \x01(\rH\x00\x88\x01\x01\x42\x06\n\x04_qid\"c\n\nSqlResults\x12\x0c\n\x04\x64\x61ta\x18\x01 \x01(\x0c\x12\x0c\n\x04rows\x18\x02 \x01(\r\x12\x0f\n\x07\x63olumns\x18\x03 \x03(\t\x12\x0e\n\x06\x64types\x18\x04 \x03(\t\x12\x10\n\x03qid\x18\x05 \x01(\rH\x00\x88\x01\x01\x42\x06\n\x04_qid2\x97\x02\n\x02\x44\x62\x12-\n\x0b\x43reateTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00(\x01\x12-\n\x0bInsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00(\x01\x12-\n\x0bUpsertTable\x12\r.db.SourceIpc\x1a\x0b.db.Message\"\x00(\x01\x12,\n\x10MaterializeTable\x12\t.db.Table\x1a\x0b.db.Message\"\x00\x12*\n\x0cGetTableInfo\x12\t.db.Table\x1a\r.db.TableInfo\"\x00\x12*\n\tSelectIpc\x12\x07.db.Sql\x1a\x0e.db.SqlResults\"\x00(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -30,15 +30,11 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_TABLEINFO']._serialized_start=116
   _globals['_TABLEINFO']._serialized_end=189
   _globals['_SOURCEIPC']._serialized_start=191
-  _globals['_SOURCEIPC']._serialized_end=284
-  _globals['_SQL']._serialized_start=286
-  _globals['_SQL']._serialized_end=304
-  _globals['_SQLS']._serialized_start=306
-  _globals['_SQLS']._serialized_end=335
-  _globals['_RESULTIPC']._serialized_start=337
-  _globals['_RESULTIPC']._serialized_end=376
-  _globals['_RESULTSIPC']._serialized_start=378
-  _globals['_RESULTSIPC']._serialized_end=422
-  _globals['_DB']._serialized_start=425
-  _globals['_DB']._serialized_end=841
+  _globals['_SOURCEIPC']._serialized_end=298
+  _globals['_SQL']._serialized_start=300
+  _globals['_SQL']._serialized_end=344
+  _globals['_SQLRESULTS']._serialized_start=346
+  _globals['_SQLRESULTS']._serialized_end=445
+  _globals['_DB']._serialized_start=448
+  _globals['_DB']._serialized_end=727
 # @@protoc_insertion_point(module_scope)

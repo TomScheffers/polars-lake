@@ -21,24 +21,18 @@ mod database;
 use dataset::Dataset;
 use database::Database;
 
-// Server:
-// Switch to Rocket as a server (with smart routes)
-
 // Database:
-// Add schemas with tables (datasets)
 // Save database in manifest file
 
 // Datasets:
 // Browse datasets from root
-// Write new dataset when not present (from stream)
-// Read dataset to dataframe (align columns + add missing values)
 
 // General:
 // Add delete operation (anti right)
 // Add drop duplicates (when creating part within dataset if keys present)
 // Add schema evolution (upsert contains more / less columns than current dataset)
 // Add CREATED_AT & CHANGED_AT columns + update in upsert
-// Add S3 storage locations
+// Add S3 storage locations (async offloading)
 
 fn main() -> Result<()> {
     enable_string_cache(true);
