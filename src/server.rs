@@ -309,7 +309,7 @@ impl Db for MyDbServer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    enable_string_cache(true);
+    enable_string_cache();
     let sv = MyDbServer::new(Arc::new(Database::new()));
     let addr = "[::1]:50051".parse()?;
     Server::builder()

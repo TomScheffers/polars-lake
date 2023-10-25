@@ -35,7 +35,7 @@ use database::Database;
 // Add S3 storage locations (async offloading)
 
 fn main() -> Result<()> {
-    enable_string_cache(true);
+    enable_string_cache();
 
     // Load stock_current dataset
     let sc = Dataset::from_storage(&"data/stock_parts".to_string(), false)?;
